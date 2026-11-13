@@ -416,11 +416,17 @@ class MainActivity : Activity() {
                 connection.setRequestProperty("User-Agent", "SmartVPN-Android/0.2")
                 val body = connection.inputStream.bufferedReader().use { it.readText() }
                 connection.disconnect()
-                val count = addParsedContent(body)
+                val parseBody = if (forAutoConnect && body.contains("://")) {
+                    body.lineSequence().take(120).joinToString("\n")
+                } else body
+                val count = addParsedContent(parseBody)
                 runOnUiThread {
-                    statusView.text = "وضعیت: دریافت تمام شد؛ $count کانفیگ جدید شناسایی شد"
                     renderServers()
                     saveServers()
+                    if (forAutoConnect) {
+                        if (servers.isEmpty()) fetchNextAutoSource()
+                        else rankAndConnectAutomatically()
+                    } else statusView.text = "دریافت تمام شد؛ $count کانفیگ جدید شناسایی شد"
                 }
             } catch (e: Exception) {
                 runOnUiThread {

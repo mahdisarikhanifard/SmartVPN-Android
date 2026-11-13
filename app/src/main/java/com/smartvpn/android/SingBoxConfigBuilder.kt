@@ -122,6 +122,15 @@ object SingBoxConfigBuilder {
         val host = uri.host ?: throw IllegalArgumentException("نشانی Shadowsocks معتبر نیست.")
         require(uri.port in 1..65535) { "پورت Shadowsocks معتبر نیست." }
         var credentials = uri.rawUserInfo?.let { decode(it) }.orEmpty()
+        // SIP002 links commonly put base64(method:password) in URI user-info.
+        // Decode it even when URI has already parsed a non-empty rawUserInfo.
+        if (credentials.isNotBlank() && !credentials.contains(':')) {
+            credentials = runCatching {
+                String(Base64.decode(pad(credentials), Base64.DEFAULT), StandardCharsets.UTF_8)
+            }.recoverCatching {
+                String(Base64.decode(pad(credentials), Base64.URL_SAFE or Base64.NO_WRAP), StandardCharsets.UTF_8)
+            }.getOrDefault(credentials)
+        }
         if (credentials.isBlank()) {
             val authority = link.substringAfter("://").substringBefore("@").substringBefore("#")
             credentials = String(Base64.decode(pad(authority), Base64.DEFAULT), StandardCharsets.UTF_8)

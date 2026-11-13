@@ -75,8 +75,9 @@ class SingBoxVpnService : VpnService() {
         setProperty(setup, "tempPath", cacheDir.absolutePath)
         setProperty(setup, "debug", false)
         setProperty(setup, "logMaxLines", 1000)
-        libbox.methods.firstOrNull { it.name == "setup" && it.parameterCount == 1 }?.invoke(null, setup)
+        val setupMethod = libbox.methods.firstOrNull { it.name == "setup" && it.parameterCount == 1 }
             ?: throw IllegalStateException("libbox.setup در کتابخانه پیدا نشد")
+        setupMethod.invoke(null, setup)
 
         val platformType = Class.forName("io.nekohasekai.libbox.PlatformInterface", true, loader)
         val handlerType = Class.forName("io.nekohasekai.libbox.CommandServerHandler", true, loader)
@@ -93,8 +94,9 @@ class SingBoxVpnService : VpnService() {
             ?: throw IllegalStateException("سازنده CommandServer پیدا نشد")
         val server = constructor.newInstance(handler, platform)
         commandServer = server
-        serverClass.methods.firstOrNull { it.name == "start" && it.parameterCount == 0 }?.invoke(server)
+        val startMethod = serverClass.methods.firstOrNull { it.name == "start" && it.parameterCount == 0 }
             ?: throw IllegalStateException("متد شروع CommandServer پیدا نشد")
+        startMethod.invoke(server)
 
         val overrideClass = Class.forName("io.nekohasekai.libbox.OverrideOptions", true, loader)
         val overrides = overrideClass.getDeclaredConstructor().newInstance()

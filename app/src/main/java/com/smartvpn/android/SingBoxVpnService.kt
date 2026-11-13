@@ -27,6 +27,7 @@ class SingBoxVpnService : VpnService() {
     @Volatile private var platformProxy: Any? = null
     @Volatile private var activeConfig: String? = null
     @Volatile private var tun: ParcelFileDescriptor? = null
+    @Volatile private var libboxSetup = false
 
     override fun onCreate() {
         super.onCreate()
@@ -49,6 +50,7 @@ class SingBoxVpnService : VpnService() {
         activeConfig = config
         worker.execute {
             try {
+                if (commandServer != null) stopTunnel()
                 startLibbox(config)
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_RUNNING, true).apply()
                 updateNotification("VPN فعال است")
@@ -68,16 +70,19 @@ class SingBoxVpnService : VpnService() {
     private fun startLibbox(config: String) {
         val loader = classLoader!!
         val libbox = Class.forName("io.nekohasekai.libbox.Libbox", true, loader)
-        val setupClass = Class.forName("io.nekohasekai.libbox.SetupOptions", true, loader)
-        val setup = setupClass.getDeclaredConstructor().newInstance()
-        setProperty(setup, "basePath", filesDir.absolutePath)
-        setProperty(setup, "workingPath", getExternalFilesDir(null)?.absolutePath ?: filesDir.absolutePath)
-        setProperty(setup, "tempPath", cacheDir.absolutePath)
-        setProperty(setup, "debug", false)
-        setProperty(setup, "logMaxLines", 1000)
-        val setupMethod = libbox.methods.firstOrNull { it.name == "setup" && it.parameterCount == 1 }
-            ?: throw IllegalStateException("libbox.setup در کتابخانه پیدا نشد")
-        setupMethod.invoke(null, setup)
+        if (!libboxSetup) {
+            val setupClass = Class.forName("io.nekohasekai.libbox.SetupOptions", true, loader)
+            val setup = setupClass.getDeclaredConstructor().newInstance()
+            setProperty(setup, "basePath", filesDir.absolutePath)
+            setProperty(setup, "workingPath", getExternalFilesDir(null)?.absolutePath ?: filesDir.absolutePath)
+            setProperty(setup, "tempPath", cacheDir.absolutePath)
+            setProperty(setup, "debug", false)
+            setProperty(setup, "logMaxLines", 1000)
+            val setupMethod = libbox.methods.firstOrNull { it.name == "setup" && it.parameterCount == 1 }
+                ?: throw IllegalStateException("libbox.setup در کتابخانه پیدا نشد")
+            setupMethod.invoke(null, setup)
+            libboxSetup = true
+        }
 
         val platformType = Class.forName("io.nekohasekai.libbox.PlatformInterface", true, loader)
         val handlerType = Class.forName("io.nekohasekai.libbox.CommandServerHandler", true, loader)

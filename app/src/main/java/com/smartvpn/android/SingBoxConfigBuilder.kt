@@ -38,6 +38,7 @@ object SingBoxConfigBuilder {
                 .put("type", "tun").put("tag", "tun-in")
                 .put("interface_name", "tun0")
                 .put("inet4_address", JSONArray().put("172.19.0.1/30"))
+                .put("inet6_address", JSONArray().put("fdfe:dcba:9876::1/126"))
                 .put("mtu", 9000).put("auto_route", true).put("strict_route", true)
                 .put("stack", "system")))
             .put("outbounds", outbounds)

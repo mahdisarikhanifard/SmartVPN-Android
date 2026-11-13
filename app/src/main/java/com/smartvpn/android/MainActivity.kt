@@ -299,6 +299,14 @@ class MainActivity : Activity() {
             }.getOrNull()
             if (!decoded.isNullOrBlank() && decoded.contains("://")) content = decoded
         }
+        if (content.startsWith("{")) {
+            val completeProfile = parseConfig(content)
+            if (completeProfile != null && servers.none { it.raw == completeProfile.raw }) {
+                servers.add(completeProfile)
+                return 1
+            }
+            return 0
+        }
         var added = 0
         content.lineSequence().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }.forEach { line ->
             val entry = parseConfig(line) ?: return@forEach

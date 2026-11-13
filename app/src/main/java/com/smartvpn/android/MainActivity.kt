@@ -86,11 +86,19 @@ class MainActivity : Activity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != SingBoxVpnService.ACTION_STATUS) return
             when (intent.getStringExtra("state")) {
-                "connected" -> { autoConnecting = false; statusView.text = "وضعیت: VPN متصل و عبور اینترنت بررسی شد" }
-                "disconnected" -> statusView.text = "وضعیت: اتصال VPN قطع است"
+                "starting" -> statusView.text = "وضعیت: درخواست اتصال دریافت شد؛ آماده‌سازی تونل…"
+                "engine_starting" -> statusView.text = "وضعیت: موتور sing-box در حال راه‌اندازی است…"
+                "checking" -> statusView.text = "وضعیت: تونل ساخته شد؛ در حال بررسی عبور واقعی اینترنت…"
+                "connected" -> { autoConnecting = false; statusView.text = "وضعیت: VPN متصل است و عبور اینترنت بررسی شد." }
+                "disconnected" -> if (!autoConnecting) statusView.text = "وضعیت: اتصال VPN قطع شد."
                 "error" -> {
-                    val message = intent.getStringExtra("error") ?: "نامشخص"
-                    if (autoConnecting) tryNextAutoCandidate(message) else statusView.text = "خطای اتصال VPN: $message"
+                    val message = intent.getStringExtra("error") ?: "علت خطا از سرویس دریافت نشد"
+                    if (autoConnecting) {
+                        statusView.text = "اتصال این سرور ناموفق بود: $message\nدر حال امتحان سرور بعدی…"
+                        tryNextAutoCandidate(message)
+                    } else {
+                        statusView.text = "خطای اتصال VPN: $message"
+                    }
                 }
             }
         }

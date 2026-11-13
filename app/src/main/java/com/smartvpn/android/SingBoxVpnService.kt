@@ -63,16 +63,33 @@ class SingBoxVpnService : VpnService() {
                 updateNotification("VPN متصل و بررسی شد")
                 sendStatus("connected", null)
             } catch (e: Exception) {
-                Log.e(TAG, "Unable to start sing-box", e)
+                val root = rootCause(e)
+                val detail = "${root.javaClass.simpleName}: ${root.message ?: "بدون پیام خطا"}"
+                Log.e(TAG, "Unable to start sing-box; root cause: $detail", root)
+                Log.e(TAG, "Original reflection exception", e)
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_RUNNING, false).apply()
-                updateNotification("خطا در اتصال: ${e.message ?: "نامشخص"}")
+                updateNotification("خطا در اتصال: $detail")
                 // Cleanup must not broadcast "disconnected" before the error reaches the UI.
                 stopTunnel(notifyDisconnected = false)
-                sendStatus("error", e.message ?: e.javaClass.simpleName)
+                sendStatus("error", detail)
                 stopSelf()
             }
         }
         return START_NOT_STICKY
+    }
+
+    private fun rootCause(error: Throwable): Throwable {
+        var current = error
+        val seen = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Throwable, Boolean>())
+        while (seen.add(current)) {
+            val next = when (current) {
+                is java.lang.reflect.InvocationTargetException -> current.targetException ?: current.cause
+                else -> current.cause
+            } ?: break
+            if (next === current) break
+            current = next
+        }
+        return current
     }
 
     private fun verifyTunnelConnectivity(): Boolean {

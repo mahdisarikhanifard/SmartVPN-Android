@@ -51,6 +51,8 @@ class MainActivity : Activity() {
     private val servers = mutableListOf<ServerEntry>()
     private var autoCandidates: List<ServerEntry> = emptyList()
     private var autoCandidateIndex = 0
+    private var autoSourceIndex = 0
+    private var autoSourceList: List<String> = emptyList()
     @Volatile private var autoConnecting = false
     private lateinit var root: LinearLayout
     private lateinit var statusView: TextView
@@ -279,8 +281,26 @@ class MainActivity : Activity() {
         else {
             val source = getSharedPreferences(PREFS, MODE_PRIVATE)
                 .getString(KEY_AUTO_SOURCE, DEFAULT_AUTO_SOURCE) ?: DEFAULT_AUTO_SOURCE
-            fetchSubscription(source, true)
+            autoSourceList = if (source == DEFAULT_AUTO_SOURCE) listOf(
+                source,
+                "https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/best.txt",
+                "https://raw.githack.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt"
+            ) else listOf(source)
+            autoSourceIndex = 0
+            fetchNextAutoSource()
         }
+    }
+
+    private fun fetchNextAutoSource() {
+        if (!autoConnecting) return
+        if (autoSourceIndex >= autoSourceList.size) {
+            autoConnecting = false
+            statusView.text = "دریافت همه منابع سرور ناموفق بود؛ اتصال اینترنت یا نشانی منبع را بررسی کنید."
+            return
+        }
+        val address = autoSourceList[autoSourceIndex++]
+        statusView.text = "در حال دریافت فهرست سرورها (${autoSourceIndex}/${autoSourceList.size})…"
+        fetchSubscription(address, true)
     }
 
     private fun rankAndConnectAutomatically() {
@@ -399,7 +419,7 @@ class MainActivity : Activity() {
                     saveServers()
                 }
             } catch (e: Exception) {
-                runOnUiThread {\n                    if (forAutoConnect) { autoConnecting = false; statusView.text = "دریافت منابع ناموفق بود: ${e.localizedMessage}" }\n                    else statusView.text = "خطا در دریافت اشتراک: ${e.localizedMessage}"\n                }
+                runOnUiThread {\n                    if (forAutoConnect) fetchNextAutoSource()\n                    else statusView.text = "خطا در دریافت اشتراک: ${e.localizedMessage}"\n                }
             }
         }
     }

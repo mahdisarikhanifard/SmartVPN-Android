@@ -129,6 +129,11 @@ class MainActivity : Activity() {
                 if (bold) setTypeface(null, Typeface.BOLD)
                 setPadding(0, 10, 0, 10)
             }
+        // Keep the legacy server-list container initialized even though the
+        // simplified home screen no longer displays it.
+        listView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
         root.addView(label("SmartVPN", 30f, Color.WHITE, true))
         root.addView(label("اتصال هوشمند و خودکار", 16f, Color.LTGRAY))
         statusView = label("آماده برای اتصال", 15f, Color.rgb(110, 220, 180), true)

@@ -283,6 +283,22 @@ class MainActivity : Activity() {
     private fun parseConfig(rawLine: String): ServerEntry? {
         return try {
             val line = rawLine.trim()
+            if (line.startsWith("{")) {
+                val config = JSONObject(line)
+                val outbounds = config.optJSONArray("outbounds") ?: return null
+                for (i in 0 until outbounds.length()) {
+                    val outbound = outbounds.optJSONObject(i) ?: continue
+                    val protocol = outbound.optString("type")
+                    if (protocol in setOf("direct", "block", "dns", "selector", "urltest")) continue
+                    val host = outbound.optString("server")
+                    val port = outbound.optInt("server_port")
+                    if (host.isNotBlank() && port in 1..65535) {
+                        return ServerEntry(UUID.randomUUID().toString(), outbound.optString("tag").ifBlank { host },
+                            protocol.uppercase(Locale.ROOT), host, port, line)
+                    }
+                }
+                return null
+            }
             if (line.startsWith("vmess://", true)) {
                 val encoded = line.substringAfter("://").substringBefore("#")
                 val jsonText = String(Base64.decode(encoded, Base64.DEFAULT), StandardCharsets.UTF_8)

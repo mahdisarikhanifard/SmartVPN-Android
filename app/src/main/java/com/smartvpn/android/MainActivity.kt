@@ -258,7 +258,10 @@ class MainActivity : Activity() {
             if (resultCode == RESULT_OK) {
                 val config = pendingVpnConfig
                 if (!config.isNullOrBlank()) startVpnService(config)
-            } else toast("مجوز ایجاد تونل VPN داده نشد.")
+            } else {
+                toast("مجوز ایجاد تونل VPN داده نشد.")
+                if (autoConnecting) tryNextAutoCandidate("مجوز VPN رد شد")
+            }
             pendingVpnConfig = null
             return
         }

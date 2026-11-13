@@ -49,6 +49,9 @@ class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private val io = Executors.newFixedThreadPool(4)
     private val servers = mutableListOf<ServerEntry>()
+    private var autoCandidates: List<ServerEntry> = emptyList()
+    private var autoCandidateIndex = 0
+    @Volatile private var autoConnecting = false
     private lateinit var root: LinearLayout
     private lateinit var statusView: TextView
     private lateinit var trafficView: TextView
@@ -81,9 +84,9 @@ class MainActivity : Activity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != SingBoxVpnService.ACTION_STATUS) return
             when (intent.getStringExtra("state")) {
-                "connected" -> statusView.text = "وضعیت: VPN متصل است"
+                "connected" -> { autoConnecting = false; statusView.text = "وضعیت: VPN متصل و عبور اینترنت بررسی شد" }
                 "disconnected" -> statusView.text = "وضعیت: اتصال VPN قطع است"
-                "error" -> statusView.text = "خطای اتصال VPN: ${intent.getStringExtra("error") ?: "نامشخص"}"
+                "error" -> {\n                    val message = intent.getStringExtra("error") ?: "نامشخص"\n                    if (autoConnecting) tryNextAutoCandidate(message) else statusView.text = "خطای اتصال VPN: $message"\n                }
             }
         }
     }
@@ -108,7 +111,8 @@ class MainActivity : Activity() {
     private fun buildScreen() {
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(24, 28, 24, 24)
+            gravity = android.view.Gravity.CENTER_HORIZONTAL
+            setPadding(28, 36, 28, 28)
             setBackgroundColor(Color.rgb(10, 21, 38))
         }
         fun label(value: String, size: Float, color: Int = Color.WHITE, bold: Boolean = false) =
@@ -116,32 +120,84 @@ class MainActivity : Activity() {
                 text = value
                 textSize = size
                 setTextColor(color)
+                gravity = android.view.Gravity.CENTER
                 if (bold) setTypeface(null, Typeface.BOLD)
-                setPadding(0, 9, 0, 9)
+                setPadding(0, 10, 0, 10)
             }
-
-        root.addView(label("SmartVPN", 28f, Color.WHITE, true))
-        root.addView(label("مدیریت سرورها و کانفیگ‌ها", 15f, Color.LTGRAY))
-        statusView = label("وضعیت: موتور تونل هنوز به برنامه متصل نشده است", 15f, Color.rgb(255, 190, 80), true)
-        root.addView(statusView)
-        val connect = Button(this).apply {
-            text = "انتخاب سرور و اتصال VPN"
-            setOnClickListener { showServerPicker() }
-        }
-        root.addView(connect, matchWidth())
-        addButton("قطع اتصال VPN") { stopVpn() }
-        root.addView(label("مدیریت کانفیگ‌ها", 19f, Color.WHITE, true))
-        addButton("افزودن لینک یا متن کانفیگ") { showTextImport() }
-        addButton("افزودن اشتراک از نشانی اینترنتی") { showSubscriptionImport() }
-        addButton("وارد کردن فایل یا QR متنی") { openConfigFile() }
-        addButton("آزمایش دسترس‌پذیری همه سرورها") { testAllServers() }
-        trafficView = label("در حال اندازه‌گیری ترافیک…", 13f, Color.rgb(110, 220, 180))
-        root.addView(trafficView)
-        root.addView(label("فهرست سرورها", 19f, Color.WHITE, true))
-        listView = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        root.addView(listView)
-        root.addView(label("توجه: آزمایش فعلی فقط اتصال TCP به میزبان و پورت را می‌سنجد؛ تست واقعی تونل، پینگ داخل VPN و سرعت اختصاصی پس از ادغام موتور انجام می‌شود. کانفیگ عمومی ناشناس قابل اعتماد فرض نمی‌شود.", 12f, Color.LTGRAY))
+        root.addView(label("SmartVPN", 30f, Color.WHITE, true))
+        root.addView(label("اتصال هوشمند و خودکار", 16f, Color.LTGRAY))
+        statusView = label("آماده برای اتصال", 15f, Color.rgb(110, 220, 180), true)
+        root.addView(statusView, matchWidth())
+        root.addView(Button(this).apply {
+            text = "اتصال"
+            textSize = 22f
+            minHeight = 76
+            setOnClickListener { startAutoConnect() }
+        }, matchWidth())
+        addButton("قطع اتصال") { autoConnecting = false; stopVpn() }
+        addButton("تنظیمات") { showSettings() }
+        trafficView = label("ترافیک کل دستگاه (نه آمار اختصاصی VPN)\nدر حال اندازه‌گیری…", 12f, Color.LTGRAY)
+        root.addView(trafficView, matchWidth())
+        root.addView(label("برنامه منابع سرور را بررسی می‌کند، گزینه‌های قابل دسترس را می‌آزماید و بهترین گزینهٔ قابل استفاده را امتحان می‌کند.", 13f, Color.LTGRAY))
         setContentView(ScrollView(this).apply { addView(root) })
+    }
+
+    private fun showSettings() {
+        val source = EditText(this).apply {
+            hint = "نشانی اشتراک خودکار (HTTPS)"
+            setText(getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_AUTO_SOURCE, DEFAULT_AUTO_SOURCE))
+            textSize = 14f
+        }
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 8, 24, 8)
+            addView(TextView(this@MainActivity).apply {
+                text = "منبع پیش‌فرض، فهرست عمومی و رایگان است؛ سرورها متعلق به اشخاص ثالث هستند و امنیت یا پایداری آن‌ها تضمین نمی‌شود."
+                textSize = 13f
+            })
+            addView(source, matchWidth())
+        }
+        AlertDialog.Builder(this)
+            .setTitle("تنظیمات اتصال")
+            .setView(panel)
+            .setPositiveButton("ذخیره منبع") { _, _ ->
+                val value = source.text.toString().trim()
+                if (value.startsWith("https://")) {
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_AUTO_SOURCE, value).apply()
+                    toast("منبع اتصال خودکار ذخیره شد.")
+                } else toast("نشانی منبع باید با HTTPS شروع شود.")
+            }
+            .setNeutralButton("مدیریت کانفیگ‌ها") { _, _ -> showConfigManagement() }
+            .setNegativeButton("بستن", null)
+            .show()
+    }
+
+    private fun showConfigManagement() {
+        AlertDialog.Builder(this)
+            .setTitle("مدیریت دستی سرورها")
+            .setItems(arrayOf("افزودن لینک یا متن کانفیگ", "افزودن اشتراک HTTPS", "وارد کردن فایل / JSON", "نمایش و مدیریت سرورها", "آزمایش سرورهای ذخیره‌شده")) { _, which ->
+                when (which) {
+                    0 -> showTextImport()
+                    1 -> showSubscriptionImport()
+                    2 -> openConfigFile()
+                    3 -> showSavedServers()
+                    4 -> testAllServers()
+                }
+            }
+            .setNegativeButton("بستن", null).show()
+    }
+
+    private fun showSavedServers() {
+        if (servers.isEmpty()) { toast("هنوز کانفیگی ذخیره نشده است."); return }
+        val labels = servers.map { "${it.name} — ${it.protocol} — ${it.host}:${it.port}" }.toTypedArray()
+        AlertDialog.Builder(this).setTitle("سرورهای ذخیره‌شده")
+            .setItems(labels) { _, which ->
+                val selected = servers[which]
+                AlertDialog.Builder(this).setMessage("سرور ${selected.name}")
+                    .setPositiveButton("اتصال دستی") { _, _ -> autoConnecting = false; connectServer(selected) }
+                    .setNeutralButton("حذف") { _, _ -> servers.remove(selected); saveServers(); showSavedServers() }
+                    .setNegativeButton("بازگشت", null).show()
+            }.setNegativeButton("بستن", null).show()
     }
 
     private fun matchWidth() = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -214,6 +270,75 @@ class MainActivity : Activity() {
 
     private var pendingVpnConfig: String? = null
 
+    private fun startAutoConnect() {
+        if (autoConnecting) return
+        autoConnecting = true
+        autoCandidateIndex = 0
+        statusView.text = "در حال آماده‌سازی اتصال هوشمند…"
+        if (servers.isNotEmpty()) rankAndConnectAutomatically()
+        else {
+            val source = getSharedPreferences(PREFS, MODE_PRIVATE)
+                .getString(KEY_AUTO_SOURCE, DEFAULT_AUTO_SOURCE) ?: DEFAULT_AUTO_SOURCE
+            fetchSubscription(source, true)
+        }
+    }
+
+    private fun rankAndConnectAutomatically() {
+        val snapshot = servers.distinctBy { it.raw }.take(120)
+        if (snapshot.isEmpty()) {
+            autoConnecting = false
+            statusView.text = "هیچ سروری برای آزمایش وجود ندارد."
+            return
+        }
+        statusView.text = "در حال آزمایش هم‌زمان ${snapshot.size} سرور…"
+        io.execute {
+            val tested = snapshot.map { server ->
+                java.util.concurrent.CompletableFuture.supplyAsync {
+                    val started = System.nanoTime()
+                    server.latencyMs = try {
+                        Socket().use { socket ->
+                            socket.connect(java.net.InetSocketAddress(server.host, server.port), 2500)
+                        }
+                        (System.nanoTime() - started) / 1_000_000
+                    } catch (_: Exception) { -1L }
+                    server
+                }
+            }.mapNotNull { runCatching { it.get() }.getOrNull() }
+                .filter { it.latencyMs >= 0 }
+                .sortedBy { it.latencyMs }
+            runOnUiThread {
+                if (!autoConnecting) return@runOnUiThread
+                autoCandidates = tested
+                autoCandidateIndex = 0
+                if (tested.isEmpty()) {
+                    autoConnecting = false
+                    statusView.text = "هیچ سروری از شبکه فعلی پاسخ نداد. منبع را در تنظیمات تغییر دهید یا بعداً دوباره تلاش کنید."
+                } else {
+                    saveServers()
+                    connectNextRanked()
+                }
+            }
+        }
+    }
+
+    private fun connectNextRanked() {
+        if (!autoConnecting) return
+        if (autoCandidateIndex >= autoCandidates.size) {
+            autoConnecting = false
+            statusView.text = "اتصال خودکار ناموفق بود؛ هیچ‌یک از سرورهای آزمایش‌شده تونل قابل استفاده نساختند."
+            return
+        }
+        val server = autoCandidates[autoCandidateIndex++]
+        statusView.text = "در حال امتحان گزینه ${autoCandidateIndex} از ${autoCandidates.size}: ${server.name} (${server.latencyMs} ms)"
+        connectServer(server)
+    }
+
+    private fun tryNextAutoCandidate(reason: String) {
+        if (!autoConnecting) return
+        statusView.text = "این گزینه ناموفق بود؛ در حال امتحان گزینه بعدی…"
+        handler.postDelayed({ if (autoConnecting) connectNextRanked() }, 700)
+    }
+
     private fun showServerPicker() {
         if (servers.isEmpty()) { toast("ابتدا لینک یا فایل کانفیگ معتبر وارد کنید."); return }
         AlertDialog.Builder(this).setTitle("انتخاب سرور برای اتصال")
@@ -229,7 +354,7 @@ class MainActivity : Activity() {
             else startVpnService(config)
         } catch (e: Exception) {
             statusView.text = "خطای پیکربندی: ${e.message}"
-            toast("این کانفیگ قابل اجرا نیست: ${e.message}")
+            toast("این کانفیگ قابل اجرا نیست: ${e.message}")\n            if (autoConnecting) tryNextAutoCandidate(e.message ?: "کانفیگ نامعتبر")
         }
     }
 
@@ -252,7 +377,7 @@ class MainActivity : Activity() {
         } catch (_: Exception) { statusView.text = "وضعیت: اتصال VPN فعال نیست یا سرویس در دسترس نیست." }
     }
 
-    private fun fetchSubscription(address: String) {
+    private fun fetchSubscription(address: String, forAutoConnect: Boolean = false) {
         if (!address.startsWith("https://")) {
             toast("برای امنیت، فقط نشانی HTTPS پذیرفته می‌شود.")
             return
@@ -274,7 +399,7 @@ class MainActivity : Activity() {
                     saveServers()
                 }
             } catch (e: Exception) {
-                runOnUiThread { statusView.text = "خطا در دریافت اشتراک: ${e.localizedMessage}" }
+                runOnUiThread {\n                    if (forAutoConnect) { autoConnecting = false; statusView.text = "دریافت منابع ناموفق بود: ${e.localizedMessage}" }\n                    else statusView.text = "خطا در دریافت اشتراک: ${e.localizedMessage}"\n                }
             }
         }
     }
@@ -482,6 +607,6 @@ class MainActivity : Activity() {
         private const val REQUEST_CONFIG = 41
         private const val REQUEST_VPN_PERMISSION = 42
         private const val PREFS = "smartvpn_storage"
-        private const val KEY_SERVERS = "servers"
+        private const val KEY_SERVERS = "servers"\n        private const val KEY_AUTO_SOURCE = "auto_source"\n        private const val DEFAULT_AUTO_SOURCE = "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt"
     }
 }

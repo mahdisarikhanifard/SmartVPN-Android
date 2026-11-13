@@ -371,6 +371,16 @@ class SingBoxVpnService : VpnService() {
     }
 
     private fun sendStatus(state: String, error: String?) {
+        val detail = when (state) {
+            "starting" -> "سرویس VPN شروع به کار کرد"
+            "engine_starting" -> "موتور sing-box در حال راه‌اندازی است"
+            "checking" -> "تونل ساخته شد؛ بررسی عبور اینترنت آغاز شد"
+            "connected" -> "تونل فعال شد و عبور اینترنت تأیید شد"
+            "disconnected" -> "تونل قطع شد"
+            "error" -> "خطای تونل: ${error ?: "نامشخص"}"
+            else -> "وضعیت سرویس: $state"
+        }
+        EventLog.append(this, detail)
         sendBroadcast(Intent(ACTION_STATUS).setPackage(packageName).putExtra("state", state).putExtra("error", error))
     }
 

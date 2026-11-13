@@ -4,8 +4,10 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.Typeface
 import android.net.TrafficStats
@@ -75,6 +77,30 @@ class MainActivity : Activity() {
         handler.post(trafficRefresh)
     }
 
+    private val vpnStatusReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != SingBoxVpnService.ACTION_STATUS) return
+            when (intent.getStringExtra("state")) {
+                "connected" -> statusView.text = "وضعیت: VPN متصل است"
+                "disconnected" -> statusView.text = "وضعیت: اتصال VPN قطع است"
+                "error" -> statusView.text = "خطای اتصال VPN: ${intent.getStringExtra("error") ?: "نامشخص"}"
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val filter = IntentFilter(SingBoxVpnService.ACTION_STATUS)
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(vpnStatusReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        else @Suppress("DEPRECATION") registerReceiver(vpnStatusReceiver, filter)
+        val running = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("vpn_running", false)
+        statusView.text = if (running) "وضعیت: VPN متصل است" else "وضعیت: VPN قطع است"
+    }
+
+    override fun onPause() {
+        runCatching { unregisterReceiver(vpnStatusReceiver) }
+        super.onPause()
+    }
     private fun buildScreen() {
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL

@@ -168,9 +168,14 @@ object SingBoxConfigBuilder {
             .put("server_name", sni).put("insecure", false)
         q.getQueryParameter("alpn")?.let { tls.put("alpn", JSONArray(it.split(',').filter(String::isNotBlank))) }
         if (security == "reality") {
+            val publicKey = q.getQueryParameter("pbk")
+                ?: q.getQueryParameter("publicKey")
+                ?: throw IllegalArgumentException("کلید عمومی Reality (pbk) در لینک وجود ندارد.")
             val reality = JSONObject().put("enabled", true)
-            q.getQueryParameter("pbk")?.let { reality.put("public_key", it) }
-            q.getQueryParameter("sid")?.let { reality.put("short_id", it) }
+                .put("public_key", publicKey)
+            q.getQueryParameter("sid")?.takeIf { it.isNotBlank() }?.let { reality.put("short_id", it) }
+            val fingerprint = q.getQueryParameter("fp")?.takeIf { it.isNotBlank() } ?: "chrome"
+            tls.put("utls", JSONObject().put("enabled", true).put("fingerprint", fingerprint))
             tls.put("reality", reality)
         }
         out.put("tls", tls)

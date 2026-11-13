@@ -189,6 +189,6 @@ object SingBoxConfigBuilder {
         }
     }
 
-    private fun decode(value: String): String = URLDecoder.decode(value, "UTF-8")
+    private fun decode(value: String): String = URLDecoder.decode(value.replace("+", "%2B"), "UTF-8")
     private fun pad(value: String): String = value + "=".repeat((4 - value.length % 4) % 4)
 }

@@ -91,8 +91,12 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         val filter = IntentFilter(SingBoxVpnService.ACTION_STATUS)
-        if (Build.VERSION.SDK_INT >= 33) registerReceiver(vpnStatusReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        else @Suppress("DEPRECATION") registerReceiver(vpnStatusReceiver, filter)
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(vpnStatusReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(vpnStatusReceiver, filter)
+        }
         val running = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("vpn_running", false)
         statusView.text = if (running) "وضعیت: VPN متصل است" else "وضعیت: VPN قطع است"
     }

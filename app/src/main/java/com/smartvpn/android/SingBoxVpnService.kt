@@ -71,14 +71,14 @@ class SingBoxVpnService : VpnService() {
                 }
                 sendStatus("checking", null)
                 updateNotification("تونل ایجاد شد؛ در حال بررسی عبور اینترنت")
-                val connectivityVerified = verifyTunnelConnectivity()
+                val probeFailure = verifyTunnelConnectivity()
                 // A successful probe from an obsolete attempt must never publish CONNECTED.
                 if (!isCurrentAttempt(attemptGeneration)) {
                     Log.i(TAG, "Connection attempt cancelled during connectivity verification")
                     stopTunnel(notifyDisconnected = false)
                     return@execute
                 }
-                if (!connectivityVerified) throw IllegalStateException("موتور اجرا شد، اما عبور اینترنت از تونل تأیید نشد؛ ممکن است سرور از کار افتاده یا مسدود باشد")
+                if (probeFailure != null) throw IllegalStateException(probeFailure)
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_RUNNING, true).apply()
                 updateNotification("VPN متصل و بررسی شد")
                 sendStatus("connected", null)
@@ -119,33 +119,45 @@ class SingBoxVpnService : VpnService() {
         return current
     }
 
-    private fun verifyTunnelConnectivity(): Boolean {
-        // Use independent connectivity endpoints: one blocked probe must not reject a working tunnel.
+    /**
+     * Returns null only when an HTTPS request succeeds through the active VPN.
+     * On failure, preserve per-endpoint diagnostics so the app log distinguishes
+     * DNS, timeout, TLS and HTTP failures instead of reporting one generic error.
+     */
+    private fun verifyTunnelConnectivity(): String? {
         val probes = listOf(
             "https://cp.cloudflare.com/generate_204",
             "https://www.gstatic.com/generate_204",
             "https://connectivitycheck.gstatic.com/generate_204",
             "https://example.com/"
         )
+        val failures = mutableListOf<String>()
         for (address in probes) {
             var connection: java.net.HttpURLConnection? = null
             try {
                 connection = java.net.URL(address).openConnection() as java.net.HttpURLConnection
-                connection.connectTimeout = 4000
-                connection.readTimeout = 4000
+                connection.connectTimeout = 7000
+                connection.readTimeout = 7000
                 connection.instanceFollowRedirects = true
                 connection.useCaches = false
                 connection.requestMethod = "GET"
-                connection.setRequestProperty("User-Agent", "SmartVPN-Android/0.6.0")
+                connection.setRequestProperty("User-Agent", "SmartVPN-Android/0.6.9")
                 val code = connection.responseCode
-                if (code in 200..399) return true
+                if (code in 200..399) {
+                    Log.i(TAG, "Tunnel probe succeeded: $address HTTP $code")
+                    return null
+                }
+                failures += "${java.net.URL(address).host}: HTTP $code"
             } catch (e: Exception) {
-                Log.w(TAG, "Tunnel connectivity probe failed for $address", e)
+                val cause = rootCause(e)
+                val detail = "${cause.javaClass.simpleName}: ${cause.message ?: "بدون پیام"}"
+                failures += "${java.net.URL(address).host}: $detail"
+                Log.w(TAG, "Tunnel connectivity probe failed for $address: $detail", e)
             } finally {
                 connection?.disconnect()
             }
         }
-        return false
+        return "تأیید اینترنت از تونل ناموفق بود؛ " + failures.joinToString(" | ")
     }
 
     private fun startLibbox(config: String) {

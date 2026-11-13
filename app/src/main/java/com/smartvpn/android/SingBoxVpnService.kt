@@ -127,17 +127,15 @@ class SingBoxVpnService : VpnService() {
     private fun verifyTunnelConnectivity(): String? {
         val probes = listOf(
             "https://cp.cloudflare.com/generate_204",
-            "https://www.gstatic.com/generate_204",
-            "https://connectivitycheck.gstatic.com/generate_204",
-            "https://example.com/"
+            "https://www.gstatic.com/generate_204"
         )
         val failures = mutableListOf<String>()
         for (address in probes) {
             var connection: java.net.HttpURLConnection? = null
             try {
                 connection = java.net.URL(address).openConnection() as java.net.HttpURLConnection
-                connection.connectTimeout = 7000
-                connection.readTimeout = 7000
+                connection.connectTimeout = 3500
+                connection.readTimeout = 3500
                 connection.instanceFollowRedirects = true
                 connection.useCaches = false
                 connection.requestMethod = "GET"

@@ -287,63 +287,73 @@ class MainActivity : Activity() {
         if (autoConnecting) return
         autoConnecting = true
         autoCandidateIndex = 0
+        autoCandidates = emptyList()
         statusView.text = "در حال آماده‌سازی اتصال هوشمند…"
-        if (servers.isNotEmpty()) rankAndConnectAutomatically()
-        else {
-            val source = getSharedPreferences(PREFS, MODE_PRIVATE)
-                .getString(KEY_AUTO_SOURCE, DEFAULT_AUTO_SOURCE) ?: DEFAULT_AUTO_SOURCE
-            autoSourceList = if (source == DEFAULT_AUTO_SOURCE) listOf(
-                source,
-                "https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/best.txt",
-                "https://raw.githack.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt"
-            ) else listOf(source)
-            autoSourceIndex = 0
-            fetchNextAutoSource()
-        }
+        val custom = getSharedPreferences(PREFS, MODE_PRIVATE)
+            .getString(KEY_AUTO_SOURCE, DEFAULT_AUTO_SOURCE) ?: DEFAULT_AUTO_SOURCE
+        // Keep saved profiles, but always refresh from several independently maintained feeds.
+        autoSourceList = buildList {
+            if (custom != DEFAULT_AUTO_SOURCE) add(custom)
+            add(DEFAULT_AUTO_SOURCE)
+            add("https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/best.txt")
+            add("https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/verified/configs.txt")
+            add("https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/fast/configs.txt")
+            add("https://raw.githubusercontent.com/3000S-HTTP/sNSub/main/output/best59.txt")
+            add("https://raw.githubusercontent.com/chaishpish/free_server_v2ray/main/%40TFMTProto")
+        }.distinct()
+        autoSourceIndex = 0
+        fetchNextAutoSource()
     }
 
     private fun fetchNextAutoSource() {
         if (!autoConnecting) return
         if (autoSourceIndex >= autoSourceList.size) {
-            autoConnecting = false
-            statusView.text = "دریافت همه منابع سرور ناموفق بود؛ اتصال اینترنت یا نشانی منبع را بررسی کنید."
+            statusView.text = "دریافت منابع تمام شد؛ ${servers.size} کانفیگ یکتا برای بررسی پیدا شد."
+            rankAndConnectAutomatically()
             return
         }
         val address = autoSourceList[autoSourceIndex++]
-        statusView.text = "در حال دریافت فهرست سرورها (${autoSourceIndex}/${autoSourceList.size})…"
+        statusView.text = "در حال دریافت منبع ${autoSourceIndex} از ${autoSourceList.size}…"
         fetchSubscription(address, true)
     }
 
     private fun rankAndConnectAutomatically() {
-        val snapshot = servers.distinctBy { it.raw }.take(120)
+        val snapshot = servers.distinctBy { it.raw }.take(900)
         if (snapshot.isEmpty()) {
             autoConnecting = false
-            statusView.text = "هیچ سروری برای آزمایش وجود ندارد."
+            statusView.text = "هیچ کانفیگ قابل پشتیبانی از منابع دریافت نشد."
             return
         }
-        statusView.text = "در حال آزمایش هم‌زمان ${snapshot.size} سرور…"
+        statusView.text = "در حال غربالگری ${snapshot.size} گزینه؛ آزمون UDP و TCP جداگانه انجام می‌شود…"
         io.execute {
+            val udpProtocols = setOf("HYSTERIA", "HYSTERIA2", "HY2", "TUIC", "WIREGUARD", "WG")
             val tested = snapshot.map { server ->
                 java.util.concurrent.CompletableFuture.supplyAsync {
-                    val started = System.nanoTime()
-                    server.latencyMs = try {
-                        Socket().use { socket ->
-                            socket.connect(java.net.InetSocketAddress(server.host, server.port), 2500)
-                        }
-                        (System.nanoTime() - started) / 1_000_000
-                    } catch (_: Exception) { -1L }
+                    if (server.protocol.uppercase(Locale.ROOT) in udpProtocols) {
+                        // TCP probing cannot validate UDP transports; keep them for a real tunnel attempt.
+                        server.latencyMs = -2L
+                    } else {
+                        val started = System.nanoTime()
+                        server.latencyMs = try {
+                            Socket().use { socket ->
+                                socket.connect(java.net.InetSocketAddress(server.host, server.port), 1800)
+                            }
+                            (System.nanoTime() - started) / 1_000_000
+                        } catch (_: Exception) { -1L }
+                    }
                     server
                 }
             }.mapNotNull { runCatching { it.get() }.getOrNull() }
-                .filter { it.latencyMs >= 0 }
-                .sortedBy { it.latencyMs }
+                .filter { it.latencyMs >= 0 || it.latencyMs == -2L }
+                .sortedWith(compareBy<ServerEntry> { if (it.latencyMs >= 0) 0 else 1 }
+                    .thenBy { if (it.latencyMs >= 0) it.latencyMs else snapshot.indexOf(it) })
             runOnUiThread {
                 if (!autoConnecting) return@runOnUiThread
                 autoCandidates = tested
                 autoCandidateIndex = 0
                 if (tested.isEmpty()) {
                     autoConnecting = false
-                    statusView.text = "هیچ سروری از شبکه فعلی پاسخ نداد. منبع را در تنظیمات تغییر دهید یا بعداً دوباره تلاش کنید."
+                    statusView.text = "هیچ سرور TCP قابل دسترسی و هیچ کانفیگ UDP برای آزمون پیدا نشد."
                 } else {
                     saveServers()
                     connectNextRanked()
@@ -425,15 +435,14 @@ class MainActivity : Activity() {
                 val body = connection.inputStream.bufferedReader().use { it.readText() }
                 connection.disconnect()
                 val parseBody = if (forAutoConnect && body.contains("://")) {
-                    body.lineSequence().take(120).joinToString("\n")
+                    body.lineSequence().take(900).joinToString("\n")
                 } else body
                 val count = addParsedContent(parseBody)
                 runOnUiThread {
                     renderServers()
                     saveServers()
                     if (forAutoConnect) {
-                        if (servers.isEmpty()) fetchNextAutoSource()
-                        else rankAndConnectAutomatically()
+                        fetchNextAutoSource()
                     } else statusView.text = "دریافت تمام شد؛ $count کانفیگ جدید شناسایی شد"
                 }
             } catch (e: Exception) {
@@ -474,13 +483,17 @@ class MainActivity : Activity() {
             return 0
         }
         var added = 0
-        content.lineSequence().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }.forEach { line ->
-            val entry = parseConfig(line) ?: return@forEach
-            if (servers.none { it.raw == entry.raw }) {
-                servers.add(entry)
-                added++
+        content.lineSequence().map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("#") }
+            .take(2500)
+            .forEach { line ->
+                if (servers.size >= 2500) return@forEach
+                val entry = parseConfig(line) ?: return@forEach
+                if (servers.none { it.raw == entry.raw }) {
+                    servers.add(entry)
+                    added++
+                }
             }
-        }
         return added
     }
 

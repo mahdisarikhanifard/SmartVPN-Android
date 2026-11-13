@@ -88,7 +88,10 @@ class MainActivity : Activity() {
             when (intent.getStringExtra("state")) {
                 "connected" -> { autoConnecting = false; statusView.text = "وضعیت: VPN متصل و عبور اینترنت بررسی شد" }
                 "disconnected" -> statusView.text = "وضعیت: اتصال VPN قطع است"
-                "error" -> {\n                    val message = intent.getStringExtra("error") ?: "نامشخص"\n                    if (autoConnecting) tryNextAutoCandidate(message) else statusView.text = "خطای اتصال VPN: $message"\n                }
+                "error" -> {
+                    val message = intent.getStringExtra("error") ?: "نامشخص"
+                    if (autoConnecting) tryNextAutoCandidate(message) else statusView.text = "خطای اتصال VPN: $message"
+                }
             }
         }
     }
@@ -374,7 +377,8 @@ class MainActivity : Activity() {
             else startVpnService(config)
         } catch (e: Exception) {
             statusView.text = "خطای پیکربندی: ${e.message}"
-            toast("این کانفیگ قابل اجرا نیست: ${e.message}")\n            if (autoConnecting) tryNextAutoCandidate(e.message ?: "کانفیگ نامعتبر")
+            toast("این کانفیگ قابل اجرا نیست: ${e.message}")
+            if (autoConnecting) tryNextAutoCandidate(e.message ?: "کانفیگ نامعتبر")
         }
     }
 
@@ -419,7 +423,10 @@ class MainActivity : Activity() {
                     saveServers()
                 }
             } catch (e: Exception) {
-                runOnUiThread {\n                    if (forAutoConnect) fetchNextAutoSource()\n                    else statusView.text = "خطا در دریافت اشتراک: ${e.localizedMessage}"\n                }
+                runOnUiThread {
+                    if (forAutoConnect) fetchNextAutoSource()
+                    else statusView.text = "خطا در دریافت اشتراک: ${e.localizedMessage}"
+                }
             }
         }
     }
@@ -627,6 +634,8 @@ class MainActivity : Activity() {
         private const val REQUEST_CONFIG = 41
         private const val REQUEST_VPN_PERMISSION = 42
         private const val PREFS = "smartvpn_storage"
-        private const val KEY_SERVERS = "servers"\n        private const val KEY_AUTO_SOURCE = "auto_source"\n        private const val DEFAULT_AUTO_SOURCE = "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt"
+        private const val KEY_SERVERS = "servers"
+        private const val KEY_AUTO_SOURCE = "auto_source"
+        private const val DEFAULT_AUTO_SOURCE = "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt"
     }
 }

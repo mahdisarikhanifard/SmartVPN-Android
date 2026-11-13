@@ -4,7 +4,7 @@ plugins {
 }
 
 dependencies {
-    implementation("com.github.singbox-android:libbox:1.14.0")
+    implementation("com.github.singbox-android:libbox:1.14.4")
 }
 
 android {

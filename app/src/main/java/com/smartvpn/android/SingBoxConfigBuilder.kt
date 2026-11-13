@@ -33,7 +33,7 @@ object SingBoxConfigBuilder {
         val outbounds = JSONArray().put(outbound).put(JSONObject().put("type", "direct").put("tag", "direct"))
         return JSONObject()
             .put("log", JSONObject().put("level", "info").put("timestamp", true))
-            .put("dns", JSONObject().put("servers", JSONArray().put(JSONObject().put("tag", "remote-dns").put("address", "https://1.1.1.1/dns-query").put("detour", "proxy"))).put("final", "remote-dns").put("strategy", "prefer_ipv4"))
+            .put("dns", JSONObject().put("servers", JSONArray().put(JSONObject().put("type", "https").put("tag", "remote-dns").put("server", "1.1.1.1").put("path", "/dns-query").put("detour", "proxy"))).put("final", "remote-dns").put("strategy", "prefer_ipv4"))
             .put("inbounds", JSONArray().put(JSONObject()
                 .put("type", "tun").put("tag", "tun-in")
                 .put("interface_name", "tun0")

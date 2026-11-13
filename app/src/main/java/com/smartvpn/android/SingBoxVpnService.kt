@@ -52,8 +52,10 @@ class SingBoxVpnService : VpnService() {
             try {
                 if (commandServer != null) stopTunnel()
                 startLibbox(config)
+                updateNotification("تونل راه‌اندازی شد؛ در حال آزمون عبور اینترنت")
+                if (!verifyTunnelConnectivity()) throw IllegalStateException("تونل اجرا شد اما عبور واقعی اینترنت تأیید نشد")
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_RUNNING, true).apply()
-                updateNotification("VPN فعال است")
+                updateNotification("VPN متصل و بررسی شد")
                 sendStatus("connected", null)
             } catch (e: Exception) {
                 Log.e(TAG, "Unable to start sing-box", e)
@@ -65,6 +67,32 @@ class SingBoxVpnService : VpnService() {
             }
         }
         return START_NOT_STICKY
+    }
+
+    private fun verifyTunnelConnectivity(): Boolean {
+        val probes = listOf(
+            "https://www.gstatic.com/generate_204",
+            "https://cp.cloudflare.com/generate_204",
+            "https://www.google.com/generate_204"
+        )
+        for (address in probes) {
+            var connection: java.net.HttpURLConnection? = null
+            try {
+                connection = java.net.URL(address).openConnection() as java.net.HttpURLConnection
+                connection.connectTimeout = 5000
+                connection.readTimeout = 5000
+                connection.instanceFollowRedirects = false
+                connection.useCaches = false
+                connection.requestMethod = "GET"
+                val code = connection.responseCode
+                if (code in 200..399) return true
+            } catch (e: Exception) {
+                Log.w(TAG, "Tunnel connectivity probe failed for $address", e)
+            } finally {
+                connection?.disconnect()
+            }
+        }
+        return false
     }
 
     private fun startLibbox(config: String) {

@@ -9,6 +9,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.net.TrafficStats
+import android.net.VpnService
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -93,12 +94,11 @@ class MainActivity : Activity() {
         statusView = label("وضعیت: موتور تونل هنوز به برنامه متصل نشده است", 15f, Color.rgb(255, 190, 80), true)
         root.addView(statusView)
         val connect = Button(this).apply {
-            text = "اتصال VPN"
-            setOnClickListener {
-                Toast.makeText(this@MainActivity, "اتصال واقعی هنوز فعال نیست؛ ابتدا باید موتور sing-box و سرویس VPN تکمیل شود.", Toast.LENGTH_LONG).show()
-            }
+            text = "انتخاب سرور و اتصال VPN"
+            setOnClickListener { showServerPicker() }
         }
         root.addView(connect, matchWidth())
+        addButton("قطع اتصال VPN") { stopVpn() }
         root.addView(label("مدیریت کانفیگ‌ها", 19f, Color.WHITE, true))
         addButton("افزودن لینک یا متن کانفیگ") { showTextImport() }
         addButton("افزودن اشتراک از نشانی اینترنتی") { showSubscriptionImport() }
@@ -162,6 +162,14 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Android SDK")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_VPN_PERMISSION) {
+            if (resultCode == RESULT_OK) {
+                val config = pendingVpnConfig
+                if (!config.isNullOrBlank()) startVpnService(config)
+            } else toast("مجوز ایجاد تونل VPN داده نشد.")
+            pendingVpnConfig = null
+            return
+        }
         if (requestCode == REQUEST_CONFIG && resultCode == RESULT_OK) {
             val uri = data?.data ?: return
             try {
@@ -171,6 +179,46 @@ class MainActivity : Activity() {
                 toast("خواندن فایل ناموفق بود: ${e.message}")
             }
         }
+    }
+
+    private var pendingVpnConfig: String? = null
+
+    private fun showServerPicker() {
+        if (servers.isEmpty()) { toast("ابتدا لینک یا فایل کانفیگ معتبر وارد کنید."); return }
+        AlertDialog.Builder(this).setTitle("انتخاب سرور برای اتصال")
+            .setItems(servers.map { "${it.name} — ${it.protocol} — ${it.host}:${it.port}" }.toTypedArray()) { _, which -> connectServer(servers[which]) }
+            .setNegativeButton("انصراف", null).show()
+    }
+
+    private fun connectServer(server: ServerEntry) {
+        try {
+            val config = SingBoxConfigBuilder.build(server.raw)
+            val permission = VpnService.prepare(this)
+            if (permission != null) { pendingVpnConfig = config; startActivityForResult(permission, REQUEST_VPN_PERMISSION) }
+            else startVpnService(config)
+        } catch (e: Exception) {
+            statusView.text = "خطای پیکربندی: ${e.message}"
+            toast("این کانفیگ قابل اجرا نیست: ${e.message}")
+        }
+    }
+
+    private fun startVpnService(config: String) {
+        val intent = Intent(this, SingBoxVpnService::class.java).putExtra(SingBoxVpnService.EXTRA_CONFIG, config)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+            statusView.text = "وضعیت: درخواست راه‌اندازی تونل به sing-box ارسال شد."
+        } catch (e: Exception) {
+            statusView.text = "خطا در شروع سرویس VPN: ${e.message}"
+            toast("شروع سرویس VPN ناموفق بود: ${e.message}")
+        }
+    }
+
+    private fun stopVpn() {
+        val intent = Intent(this, SingBoxVpnService::class.java).setAction(SingBoxVpnService.ACTION_STOP)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+            statusView.text = "وضعیت: درخواست قطع اتصال ارسال شد."
+        } catch (_: Exception) { statusView.text = "وضعیت: اتصال VPN فعال نیست یا سرویس در دسترس نیست." }
     }
 
     private fun fetchSubscription(address: String) {
@@ -319,6 +367,10 @@ class MainActivity : Activity() {
                 textSize = 14f
             })
             card.addView(Button(this).apply {
+                text = "اتصال به این سرور"
+                setOnClickListener { connectServer(server) }
+            })
+            card.addView(Button(this).apply {
                 text = "حذف سرور"
                 setOnClickListener {
                     servers.removeAll { it.id == server.id }
@@ -373,6 +425,7 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REQUEST_CONFIG = 41
+        private const val REQUEST_VPN_PERMISSION = 42
         private const val PREFS = "smartvpn_storage"
         private const val KEY_SERVERS = "servers"
     }

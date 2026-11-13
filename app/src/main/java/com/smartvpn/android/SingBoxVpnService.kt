@@ -204,7 +204,7 @@ class SingBoxVpnService : VpnService() {
             val prefix = readInt(item, "prefix", -1)
             if (address.isNotBlank() && prefix in 0..128) {
                 if (exclude && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    builder.excludeRoute(android.net.IpPrefix(address, prefix))
+                    builder.excludeRoute(android.net.IpPrefix(java.net.InetAddress.getByName(address), prefix))
                 } else builder.addRoute(address, prefix)
             }
         }

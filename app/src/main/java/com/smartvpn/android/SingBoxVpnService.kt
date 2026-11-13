@@ -151,7 +151,7 @@ class SingBoxVpnService : VpnService() {
                 "usePlatformBridge", "usePlatformAutoRedirect" -> return false
                 "startDefaultInterfaceMonitor", "closeDefaultInterfaceMonitor",
                 "clearDNSCache", "registerMyInterface", "closeNeighborMonitor" -> return null
-                "getInterfaces" -> return emptyIteratorProxy("io.nekohasekai.libbox.NetworkInterfaceIterator")
+                "getInterfaces" -> return networkInterfacesProxy()
                 "findConnectionOwner" -> {
                     val type = Class.forName("io.nekohasekai.libbox.ConnectionOwner")
                     return type.getDeclaredConstructor().newInstance()
@@ -213,6 +213,53 @@ class SingBoxVpnService : VpnService() {
     private fun hasAddresses(options: Any, name: String) = hasNext(readValue(options, name))
     private fun hasRoutes(options: Any, name: String) = hasNext(readValue(options, name))
 
+    private fun networkInterfacesProxy(): Any {
+        val entries = mutableListOf<Any>()
+        val type = Class.forName("io.nekohasekai.libbox.NetworkInterface")
+        val all = java.net.NetworkInterface.getNetworkInterfaces()
+        while (all != null && all.hasMoreElements()) {
+            val physical = all.nextElement()
+            if (physical.isLoopback || !runCatching { physical.isUp }.getOrDefault(false)) continue
+            val item = type.getDeclaredConstructor().newInstance()
+            setProperty(item, "name", physical.name)
+            setProperty(item, "index", physical.index)
+            setProperty(item, "mtu", runCatching { physical.mtu }.getOrDefault(1500))
+            val addresses = physical.interfaceAddresses.mapNotNull { entry ->
+                val address = entry.address?.hostAddress ?: return@mapNotNull null
+                "$address/${entry.networkPrefixLength}"
+            }
+            setProperty(item, "addresses", stringIteratorProxy(addresses))
+            setProperty(item, "dnsServer", stringIteratorProxy(emptyList()))
+            setProperty(item, "dnsSearchDomain", stringIteratorProxy(emptyList()))
+            setProperty(item, "gateway", stringIteratorProxy(emptyList()))
+            setProperty(item, "flags", 65)
+            setProperty(item, "metered", false)
+            setProperty(item, "type", 0)
+            entries.add(item)
+        }
+        val iteratorType = Class.forName("io.nekohasekai.libbox.NetworkInterfaceIterator")
+        val iterator = entries.iterator()
+        return Proxy.newProxyInstance(classLoader, arrayOf(iteratorType)) { _, method, _ ->
+            when (method.name) {
+                "hasNext" -> iterator.hasNext()
+                "next" -> if (iterator.hasNext()) iterator.next() else null
+                else -> defaultValue(method.returnType)
+            }
+        }
+    }
+
+    private fun stringIteratorProxy(values: List<String>): Any {
+        val iteratorType = Class.forName("io.nekohasekai.libbox.StringIterator")
+        val iterator = values.iterator()
+        return Proxy.newProxyInstance(classLoader, arrayOf(iteratorType)) { _, method, _ ->
+            when (method.name) {
+                "hasNext" -> iterator.hasNext()
+                "next" -> if (iterator.hasNext()) iterator.next() else ""
+                "len" -> values.size
+                else -> defaultValue(method.returnType)
+            }
+        }
+    }
     private fun emptyIteratorProxy(interfaceName: String): Any {
         val type = Class.forName(interfaceName)
         return Proxy.newProxyInstance(classLoader, arrayOf(type)) { _, method, _ ->

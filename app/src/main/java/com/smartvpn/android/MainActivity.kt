@@ -506,7 +506,12 @@ class MainActivity : Activity() {
 
     private fun parseConfig(rawLine: String): ServerEntry? {
         return try {
-            val line = rawLine.trim()
+            val original = rawLine.trim()
+            // Strip provider annotations and display fragments before URI parsing.
+            // Some public feeds append unescaped labels/emoji after '#', which
+            // makes java.net.URI reject otherwise valid server credentials.
+            val line = if (original.startsWith("{")) original
+                else original.substringBefore(" | ").substringBefore("#").trim()
             if (line.startsWith("{")) {
                 val config = JSONObject(line)
                 val outbounds = config.optJSONArray("outbounds") ?: return null

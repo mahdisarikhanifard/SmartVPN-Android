@@ -318,7 +318,14 @@ class MainActivity : Activity() {
     }
 
     private fun rankAndConnectAutomatically() {
-        val snapshot = servers.distinctBy { it.raw }.take(900)
+        val allCandidates = servers.distinctBy { it.raw }
+        // Test a priority slice plus a spread across later feeds, so one stale
+        // subscription cannot monopolize the entire connection attempt.
+        val prioritySlice = allCandidates.take(350)
+        val remaining = allCandidates.drop(350)
+        val sampleStep = maxOf(1, remaining.size / 350)
+        val diverseSlice = remaining.filterIndexed { index, _ -> index % sampleStep == 0 }.take(350)
+        val snapshot = (prioritySlice + diverseSlice).distinctBy { it.raw }
         if (snapshot.isEmpty()) {
             autoConnecting = false
             statusView.text = "هیچ کانفیگ قابل پشتیبانی از منابع دریافت نشد."
@@ -487,7 +494,7 @@ class MainActivity : Activity() {
             .filter { it.isNotEmpty() && !it.startsWith("#") }
             .take(2500)
             .forEach { line ->
-                if (servers.size >= 2500) return@forEach
+                if (servers.size >= 5000) return@forEach
                 val entry = parseConfig(line) ?: return@forEach
                 if (servers.none { it.raw == entry.raw }) {
                     servers.add(entry)

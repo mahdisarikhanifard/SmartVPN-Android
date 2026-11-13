@@ -70,20 +70,23 @@ class SingBoxVpnService : VpnService() {
     }
 
     private fun verifyTunnelConnectivity(): Boolean {
+        // Use independent connectivity endpoints: one blocked probe must not reject a working tunnel.
         val probes = listOf(
-            "https://www.gstatic.com/generate_204",
             "https://cp.cloudflare.com/generate_204",
-            "https://www.google.com/generate_204"
+            "https://www.gstatic.com/generate_204",
+            "https://connectivitycheck.gstatic.com/generate_204",
+            "https://example.com/"
         )
         for (address in probes) {
             var connection: java.net.HttpURLConnection? = null
             try {
                 connection = java.net.URL(address).openConnection() as java.net.HttpURLConnection
-                connection.connectTimeout = 5000
-                connection.readTimeout = 5000
-                connection.instanceFollowRedirects = false
+                connection.connectTimeout = 4000
+                connection.readTimeout = 4000
+                connection.instanceFollowRedirects = true
                 connection.useCaches = false
                 connection.requestMethod = "GET"
+                connection.setRequestProperty("User-Agent", "SmartVPN-Android/0.6.0")
                 val code = connection.responseCode
                 if (code in 200..399) return true
             } catch (e: Exception) {

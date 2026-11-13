@@ -77,6 +77,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         loadServers()
+        EventLog.append(this, "برنامه اجرا شد؛ ${servers.size} کانفیگ ذخیره‌شده بارگذاری شد")
         buildScreen()
         renderServers()
         handler.post(trafficRefresh)
@@ -86,13 +87,14 @@ class MainActivity : Activity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != SingBoxVpnService.ACTION_STATUS) return
             when (intent.getStringExtra("state")) {
-                "starting" -> statusView.text = "وضعیت: درخواست اتصال دریافت شد؛ آماده‌سازی تونل…"
-                "engine_starting" -> statusView.text = "وضعیت: موتور sing-box در حال راه‌اندازی است…"
-                "checking" -> statusView.text = "وضعیت: تونل ساخته شد؛ در حال بررسی عبور واقعی اینترنت…"
-                "connected" -> { autoConnecting = false; statusView.text = "وضعیت: VPN متصل است و عبور اینترنت بررسی شد." }
-                "disconnected" -> if (!autoConnecting) statusView.text = "وضعیت: اتصال VPN قطع شد."
+                "starting" -> { EventLog.append(this@MainActivity, "سرویس: آماده‌سازی تونل"); statusView.text = "وضعیت: درخواست اتصال دریافت شد؛ آماده‌سازی تونل…" }
+                "engine_starting" -> { EventLog.append(this@MainActivity, "سرویس: راه‌اندازی موتور sing-box"); statusView.text = "وضعیت: موتور sing-box در حال راه‌اندازی است…" }
+                "checking" -> { EventLog.append(this@MainActivity, "سرویس: تونل ساخته شد؛ بررسی عبور اینترنت"); statusView.text = "وضعیت: تونل ساخته شد؛ در حال بررسی عبور واقعی اینترنت…" }
+                "connected" -> { EventLog.append(this@MainActivity, "نتیجه: اتصال برقرار شد و عبور اینترنت تأیید شد"); autoConnecting = false; statusView.text = "وضعیت: VPN متصل است و عبور اینترنت بررسی شد." }
+                "disconnected" -> { EventLog.append(this@MainActivity, "سرویس: اتصال قطع شد"); if (!autoConnecting) statusView.text = "وضعیت: اتصال VPN قطع شد." }
                 "error" -> {
                     val message = intent.getStringExtra("error") ?: "علت خطا از سرویس دریافت نشد"
+                    EventLog.append(this@MainActivity, "خطای سرویس VPN: $message")
                     if (autoConnecting) {
                         statusView.text = "اتصال این سرور ناموفق بود: $message\nدر حال امتحان سرور بعدی…"
                         tryNextAutoCandidate(message)
@@ -146,6 +148,7 @@ class MainActivity : Activity() {
         root.addView(label("اتصال هوشمند و خودکار", 16f, Color.LTGRAY))
         statusView = label("آماده برای اتصال", 15f, Color.rgb(110, 220, 180), true)
         root.addView(statusView, matchWidth())
+        addButton("گزارش وضعیت و عیب‌یابی") { showStatusPage() }
         root.addView(Button(this).apply {
             text = "اتصال"
             textSize = 22f
@@ -158,6 +161,62 @@ class MainActivity : Activity() {
         root.addView(trafficView, matchWidth())
         root.addView(label("برنامه منابع سرور را بررسی می‌کند، گزینه‌های قابل دسترس را می‌آزماید و بهترین گزینهٔ قابل استفاده را امتحان می‌کند.", 13f, Color.LTGRAY))
         setContentView(ScrollView(this).apply { addView(root) })
+    }
+
+    private fun showStatusPage() {
+        val page = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 24, 24, 24)
+            setBackgroundColor(Color.rgb(10, 21, 38))
+        }
+        val heading = TextView(this).apply {
+            text = "گزارش وضعیت و عیب‌یابی"
+            textSize = 22f
+            setTextColor(Color.WHITE)
+            setTypeface(null, Typeface.BOLD)
+            gravity = android.view.Gravity.CENTER
+            setPadding(0, 8, 0, 16)
+        }
+        val report = TextView(this).apply {
+            text = EventLog.read(this@MainActivity)
+            textSize = 12f
+            setTextColor(Color.rgb(225, 232, 242))
+            setTextIsSelectable(true)
+            setPadding(8, 8, 8, 8)
+        }
+        page.addView(heading, matchWidth())
+        page.addView(Button(this).apply {
+            text = "به‌روزرسانی گزارش"
+            setOnClickListener { report.text = EventLog.read(this@MainActivity) }
+        }, matchWidth())
+        page.addView(Button(this).apply {
+            text = "کپی گزارش"
+            setOnClickListener {
+                val value = EventLog.read(this@MainActivity)
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("SmartVPN status report", value))
+                toast("گزارش در کلیپ‌بورد کپی شد.")
+            }
+        }, matchWidth())
+        page.addView(Button(this).apply {
+            text = "ارسال / اشتراک‌گذاری گزارش"
+            setOnClickListener {
+                val share = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, "گزارش عیب‌یابی SmartVPN")
+                    putExtra(Intent.EXTRA_TEXT, EventLog.read(this@MainActivity))
+                }
+                startActivity(Intent.createChooser(share, "ارسال گزارش با"))
+            }
+        }, matchWidth())
+        page.addView(Button(this).apply {
+            text = "بازگشت به صفحه اصلی"
+            setOnClickListener { buildScreen() }
+        }, matchWidth())
+        page.addView(report, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+        ))
+        setContentView(page)
     }
 
     private fun showSettings() {
@@ -297,6 +356,7 @@ class MainActivity : Activity() {
         autoCandidateIndex = 0
         autoCandidates = emptyList()
         statusView.text = "در حال آماده‌سازی اتصال هوشمند…"
+        EventLog.append(this, "شروع اتصال خودکار؛ منابع عمومی در حال دریافت")
         val custom = getSharedPreferences(PREFS, MODE_PRIVATE)
             .getString(KEY_AUTO_SOURCE, DEFAULT_AUTO_SOURCE) ?: DEFAULT_AUTO_SOURCE
         // Keep saved profiles, but always refresh from several independently maintained feeds.
@@ -317,11 +377,13 @@ class MainActivity : Activity() {
         if (!autoConnecting) return
         if (autoSourceIndex >= autoSourceList.size) {
             statusView.text = "دریافت منابع تمام شد؛ ${servers.size} کانفیگ یکتا برای بررسی پیدا شد."
+            EventLog.append(this, "پایان دریافت منابع؛ ${servers.size} کانفیگ یکتا آماده بررسی است")
             rankAndConnectAutomatically()
             return
         }
         val address = autoSourceList[autoSourceIndex++]
         statusView.text = "در حال دریافت منبع ${autoSourceIndex} از ${autoSourceList.size}…"
+        EventLog.append(this, "دریافت منبع ${autoSourceIndex}/${autoSourceList.size}: ${runCatching { URL(address).host }.getOrDefault("منبع سفارشی")}")
         fetchSubscription(address, true)
     }
 
@@ -340,6 +402,7 @@ class MainActivity : Activity() {
             return
         }
         statusView.text = "در حال غربالگری ${snapshot.size} گزینه؛ آزمون UDP و TCP جداگانه انجام می‌شود…"
+        EventLog.append(this, "شروع بررسی دسترسی؛ ${snapshot.size} گزینه از ${allCandidates.size} کانفیگ یکتا انتخاب شد؛ آزمون TCP فقط دسترسی پورت را می‌سنجد")
         io.execute {
             val udpProtocols = setOf("HYSTERIA", "HYSTERIA2", "HY2", "TUIC", "WIREGUARD", "WG")
             val tested = snapshot.map { server ->
@@ -366,6 +429,7 @@ class MainActivity : Activity() {
                 if (!autoConnecting) return@runOnUiThread
                 autoCandidates = tested
                 autoCandidateIndex = 0
+                EventLog.append(this@MainActivity, "پایان غربالگری؛ ${tested.size} گزینه برای تلاش واقعی تونل باقی ماند")
                 if (tested.isEmpty()) {
                     autoConnecting = false
                     statusView.text = "هیچ سرور TCP قابل دسترسی و هیچ کانفیگ UDP برای آزمون پیدا نشد."
@@ -385,12 +449,14 @@ class MainActivity : Activity() {
             return
         }
         val server = autoCandidates[autoCandidateIndex++]
+        EventLog.append(this, "تلاش ${autoCandidateIndex}/${autoCandidates.size}: ${server.protocol} ${server.host}:${server.port}; آزمون TCP=${if (server.latencyMs == -2L) "انجام‌نشده (UDP)" else if (server.latencyMs >= 0) "${server.latencyMs}ms" else "ناموفق"}")
         statusView.text = "در حال امتحان گزینه ${autoCandidateIndex} از ${autoCandidates.size}: ${server.name} (${server.latencyMs} ms)"
         connectServer(server)
     }
 
     private fun tryNextAutoCandidate(reason: String) {
         if (!autoConnecting) return
+        EventLog.append(this, "شکست تلاش سرور؛ علت: ${reason.take(240)}")
         statusView.text = "این گزینه ناموفق بود؛ در حال امتحان گزینه بعدی…"
         handler.postDelayed({ if (autoConnecting) connectNextRanked() }, 700)
     }
@@ -403,12 +469,14 @@ class MainActivity : Activity() {
     }
 
     private fun connectServer(server: ServerEntry) {
+        EventLog.append(this, "آماده‌سازی کانفیگ برای اتصال: ${server.protocol} ${server.host}:${server.port}")
         try {
             val config = SingBoxConfigBuilder.build(server.raw)
             val permission = VpnService.prepare(this)
             if (permission != null) { pendingVpnConfig = config; startActivityForResult(permission, REQUEST_VPN_PERMISSION) }
             else startVpnService(config)
         } catch (e: Exception) {
+            EventLog.append(this, "خطای ساخت پیکربندی: ${e.javaClass.simpleName}: ${e.message ?: "نامشخص"}")
             statusView.text = "خطای پیکربندی: ${e.message}"
             toast("این کانفیگ قابل اجرا نیست: ${e.message}")
             if (autoConnecting) tryNextAutoCandidate(e.message ?: "کانفیگ نامعتبر")
@@ -419,8 +487,10 @@ class MainActivity : Activity() {
         val intent = Intent(this, SingBoxVpnService::class.java).putExtra(SingBoxVpnService.EXTRA_CONFIG, config)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+            EventLog.append(this, "درخواست شروع سرویس VPN ارسال شد")
             statusView.text = "وضعیت: درخواست راه‌اندازی تونل به sing-box ارسال شد."
         } catch (e: Exception) {
+            EventLog.append(this, "شروع سرویس VPN ناموفق: ${e.javaClass.simpleName}: ${e.message ?: "نامشخص"}")
             statusView.text = "خطا در شروع سرویس VPN: ${e.message}"
             toast("شروع سرویس VPN ناموفق بود: ${e.message}")
         }
@@ -430,8 +500,9 @@ class MainActivity : Activity() {
         val intent = Intent(this, SingBoxVpnService::class.java).setAction(SingBoxVpnService.ACTION_STOP)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+            EventLog.append(this, "درخواست قطع اتصال ارسال شد")
             statusView.text = "وضعیت: درخواست قطع اتصال ارسال شد."
-        } catch (_: Exception) { statusView.text = "وضعیت: اتصال VPN فعال نیست یا سرویس در دسترس نیست." }
+        } catch (_: Exception) { EventLog.append(this, "ارسال درخواست قطع اتصال ناموفق بود"); statusView.text = "وضعیت: اتصال VPN فعال نیست یا سرویس در دسترس نیست." }
     }
 
     private fun fetchSubscription(address: String, forAutoConnect: Boolean = false) {
@@ -453,6 +524,7 @@ class MainActivity : Activity() {
                     body.lineSequence().take(900).joinToString("\n")
                 } else body
                 val count = addParsedContent(parseBody)
+                EventLog.append(this, "دریافت منبع موفق؛ حجم پاسخ ${body.toByteArray().size} بایت؛ کانفیگ جدید $count؛ میزبان ${runCatching { URL(address).host }.getOrDefault("نامشخص")}")
                 runOnUiThread {
                     renderServers()
                     saveServers()
@@ -461,6 +533,7 @@ class MainActivity : Activity() {
                     } else statusView.text = "دریافت تمام شد؛ $count کانفیگ جدید شناسایی شد"
                 }
             } catch (e: Exception) {
+                EventLog.append(this, "خطا در دریافت منبع ${runCatching { URL(address).host }.getOrDefault("نامشخص")}: ${e.javaClass.simpleName}: ${e.localizedMessage ?: "بدون توضیح"}")
                 runOnUiThread {
                     if (forAutoConnect) fetchNextAutoSource()
                     else statusView.text = "خطا در دریافت اشتراک: ${e.localizedMessage}"

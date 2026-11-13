@@ -28,6 +28,8 @@ class SingBoxVpnService : VpnService() {
     @Volatile private var activeConfig: String? = null
     @Volatile private var tun: ParcelFileDescriptor? = null
     @Volatile private var libboxSetup = false
+    // Invalidates in-flight startup/verification when the user stops or replaces a connection.
+    @Volatile private var operationGeneration = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -37,7 +39,10 @@ class SingBoxVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            operationGeneration += 1
+            activeConfig = null
             stopTunnel(notifyDisconnected = true)
+            updateNotification("VPN قطع شد")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -47,22 +52,42 @@ class SingBoxVpnService : VpnService() {
             stopSelf()
             return START_NOT_STICKY
         }
+        val attemptGeneration = operationGeneration + 1
+        operationGeneration = attemptGeneration
         activeConfig = config
         sendStatus("starting", null)
         updateNotification("در حال آماده‌سازی تونل VPN")
         worker.execute {
             try {
+                if (!isCurrentAttempt(attemptGeneration)) return@execute
                 if (commandServer != null) stopTunnel(notifyDisconnected = false)
                 sendStatus("engine_starting", null)
                 updateNotification("در حال راه‌اندازی موتور sing-box")
                 startLibbox(config)
+                if (!isCurrentAttempt(attemptGeneration)) {
+                    Log.i(TAG, "Connection attempt cancelled after engine startup")
+                    stopTunnel(notifyDisconnected = false)
+                    return@execute
+                }
                 sendStatus("checking", null)
                 updateNotification("تونل ایجاد شد؛ در حال بررسی عبور اینترنت")
-                if (!verifyTunnelConnectivity()) throw IllegalStateException("موتور اجرا شد، اما عبور اینترنت از تونل تأیید نشد؛ ممکن است سرور از کار افتاده یا مسدود باشد")
+                val connectivityVerified = verifyTunnelConnectivity()
+                // A successful probe from an obsolete attempt must never publish CONNECTED.
+                if (!isCurrentAttempt(attemptGeneration)) {
+                    Log.i(TAG, "Connection attempt cancelled during connectivity verification")
+                    stopTunnel(notifyDisconnected = false)
+                    return@execute
+                }
+                if (!connectivityVerified) throw IllegalStateException("موتور اجرا شد، اما عبور اینترنت از تونل تأیید نشد؛ ممکن است سرور از کار افتاده یا مسدود باشد")
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_RUNNING, true).apply()
                 updateNotification("VPN متصل و بررسی شد")
                 sendStatus("connected", null)
             } catch (e: Exception) {
+                if (!isCurrentAttempt(attemptGeneration)) {
+                    Log.i(TAG, "Ignoring error from cancelled connection attempt", e)
+                    stopTunnel(notifyDisconnected = false)
+                    return@execute
+                }
                 val root = rootCause(e)
                 val detail = "${root.javaClass.simpleName}: ${root.message ?: "بدون پیام خطا"}"
                 Log.e(TAG, "Unable to start sing-box; root cause: $detail", root)
@@ -77,6 +102,8 @@ class SingBoxVpnService : VpnService() {
         }
         return START_NOT_STICKY
     }
+
+    private fun isCurrentAttempt(generation: Int): Boolean = generation == operationGeneration
 
     private fun rootCause(error: Throwable): Throwable {
         var current = error
@@ -430,6 +457,7 @@ class SingBoxVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        operationGeneration += 1
         stopTunnel(notifyDisconnected = false)
         worker.shutdownNow()
         super.onDestroy()

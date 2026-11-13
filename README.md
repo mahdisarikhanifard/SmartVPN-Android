@@ -1,6 +1,6 @@
 # SmartVPN Android
 
-کلاینت اندرویدی مبتنی بر Kotlin و موتور بومی sing-box/libbox.
+کلاینت اندرویدی مبتنی بر Kotlin و موتور بومی sing-box/libbox 1.14.4.
 
 ## نسخه 0.4.0
 

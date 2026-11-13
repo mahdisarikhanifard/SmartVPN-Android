@@ -37,7 +37,7 @@ class SingBoxVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            stopTunnel()
+            stopTunnel(notifyDisconnected = true)
             stopSelf()
             return START_NOT_STICKY
         }
@@ -48,12 +48,17 @@ class SingBoxVpnService : VpnService() {
             return START_NOT_STICKY
         }
         activeConfig = config
+        sendStatus("starting", null)
+        updateNotification("در حال آماده‌سازی تونل VPN")
         worker.execute {
             try {
-                if (commandServer != null) stopTunnel()
+                if (commandServer != null) stopTunnel(notifyDisconnected = false)
+                sendStatus("engine_starting", null)
+                updateNotification("در حال راه‌اندازی موتور sing-box")
                 startLibbox(config)
-                updateNotification("تونل راه‌اندازی شد؛ در حال آزمون عبور اینترنت")
-                if (!verifyTunnelConnectivity()) throw IllegalStateException("تونل اجرا شد اما عبور واقعی اینترنت تأیید نشد")
+                sendStatus("checking", null)
+                updateNotification("تونل ایجاد شد؛ در حال بررسی عبور اینترنت")
+                if (!verifyTunnelConnectivity()) throw IllegalStateException("موتور اجرا شد، اما عبور اینترنت از تونل تأیید نشد؛ ممکن است سرور از کار افتاده یا مسدود باشد")
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_RUNNING, true).apply()
                 updateNotification("VPN متصل و بررسی شد")
                 sendStatus("connected", null)
@@ -61,8 +66,9 @@ class SingBoxVpnService : VpnService() {
                 Log.e(TAG, "Unable to start sing-box", e)
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_RUNNING, false).apply()
                 updateNotification("خطا در اتصال: ${e.message ?: "نامشخص"}")
+                // Cleanup must not broadcast "disconnected" before the error reaches the UI.
+                stopTunnel(notifyDisconnected = false)
                 sendStatus("error", e.message ?: e.javaClass.simpleName)
-                stopTunnel()
                 stopSelf()
             }
         }
@@ -146,7 +152,7 @@ class SingBoxVpnService : VpnService() {
     private inner class HandlerInvocation : InvocationHandler {
         override fun invoke(proxy: Any, method: Method, args: Array<out Any?>?): Any? {
             when (method.name) {
-                "serviceStop" -> { worker.execute { stopTunnel(); stopSelf() }; return null }
+                "serviceStop" -> { worker.execute { stopTunnel(notifyDisconnected = true); stopSelf() }; return null }
                 "serviceReload" -> {
                     val config = activeConfig ?: return null
                     worker.execute { runCatching { reloadLibbox(config) }.onFailure { Log.e(TAG, "reload", it) } }
@@ -350,7 +356,7 @@ class SingBoxVpnService : VpnService() {
         else -> null
     }
 
-    private fun stopTunnel() {
+    private fun stopTunnel(notifyDisconnected: Boolean = false) {
         runCatching {
             commandServer?.let { server ->
                 server.javaClass.methods.firstOrNull { it.name == "closeService" && it.parameterCount == 0 }?.invoke(server)
@@ -361,7 +367,7 @@ class SingBoxVpnService : VpnService() {
         tun?.close()
         tun = null
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_RUNNING, false).apply()
-        sendStatus("disconnected", null)
+        if (notifyDisconnected) sendStatus("disconnected", null)
     }
 
     private fun sendStatus(state: String, error: String?) {
@@ -391,13 +397,13 @@ class SingBoxVpnService : VpnService() {
     }
 
     override fun onRevoke() {
-        stopTunnel()
+        stopTunnel(notifyDisconnected = true)
         stopSelf()
         super.onRevoke()
     }
 
     override fun onDestroy() {
-        stopTunnel()
+        stopTunnel(notifyDisconnected = false)
         worker.shutdownNow()
         super.onDestroy()
     }

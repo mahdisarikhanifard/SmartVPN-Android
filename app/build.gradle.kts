@@ -3,6 +3,10 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+dependencies {
+    implementation("com.github.singbox-android:libbox:1.14.0")
+}
+
 android {
     namespace = "com.smartvpn.android"
     compileSdk = 35
@@ -11,8 +15,8 @@ android {
         applicationId = "com.smartvpn.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
     }
 
     compileOptions {

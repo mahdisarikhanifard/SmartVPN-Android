@@ -130,85 +130,79 @@ class SingBoxVpnService : VpnService() {
      * DNS, timeout, TLS and HTTP failures instead of reporting one generic error.
      */
     private fun verifyTunnelConnectivity(): String? {
-        // Try every resolved address separately, preferring IPv4. A broken IPv6
-        // route must not hide a working IPv4 tunnel. TLS still uses the real host
-        // name for SNI and certificate validation.
-        val probes = listOf(
-            "https://example.com/",
-            "https://www.microsoft.com/",
-            "https://cp.cloudflare.com/generate_204",
-            "https://www.gstatic.com/generate_204"
-        )
+        // Probe through sing-box's loopback-only mixed inbound. This verifies the
+        // actual outbound without relying on Android's routing of service sockets.
+        val hosts = listOf("example.com", "www.microsoft.com")
         val failures = mutableListOf<String>()
-        Thread.sleep(700)
-        for (address in probes) {
-            val url = java.net.URL(address)
-            val host = url.host
-            val port = if (url.port > 0) url.port else 443
-            val path = if (url.file.isNullOrBlank()) "/" else url.file
-            val addresses = try {
-                java.net.InetAddress.getAllByName(host).sortedBy {
-                    if (it is java.net.Inet4Address) 0 else 1
+        Thread.sleep(500)
+        for (host in hosts) {
+            var raw: java.net.Socket? = null
+            var tls: javax.net.ssl.SSLSocket? = null
+            var phase = "LOCAL_PROXY_CONNECT"
+            try {
+                raw = java.net.Socket()
+                raw.connect(java.net.InetSocketAddress("127.0.0.1", PROBE_PORT), 2500)
+                raw.soTimeout = 5000
+
+                phase = "PROXY_CONNECT"
+                val request = "CONNECT " + host + ":443 HTTP/1.1\r\nHost: " +
+                    host + ":443\r\nProxy-Connection: Keep-Alive\r\n\r\n"
+                raw.getOutputStream().write(request.toByteArray(Charsets.US_ASCII))
+                raw.getOutputStream().flush()
+                val input = raw.getInputStream()
+                val statusLine = readHttpLine(input)
+                if (!statusLine.matches(Regex("HTTP/1\\.[01] 200(?: .*)?"))) {
+                    throw IllegalStateException("پاسخ CONNECT ناموفق: " + statusLine.take(160))
                 }
+                while (true) {
+                    val header = readHttpLine(input)
+                    if (header.isEmpty()) break
+                }
+
+                phase = "TLS_HANDSHAKE"
+                tls = (javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory)
+                    .createSocket(raw, host, 443, true) as javax.net.ssl.SSLSocket
+                tls.soTimeout = 5000
+                val parameters = tls.sslParameters
+                parameters.endpointIdentificationAlgorithm = "HTTPS"
+                parameters.serverNames = listOf(javax.net.ssl.SNIHostName(host))
+                tls.sslParameters = parameters
+                tls.startHandshake()
+
+                phase = "HTTPS_REQUEST"
+                val httpsRequest = "GET / HTTP/1.1\r\nHost: " + host +
+                    "\r\nUser-Agent: SmartVPN-Android/0.7.4\r\nConnection: close\r\n\r\n"
+                tls.outputStream.write(httpsRequest.toByteArray(Charsets.US_ASCII))
+                tls.outputStream.flush()
+                val response = readHttpLine(tls.inputStream)
+                val code = Regex("^HTTP/\\d(?:\\.\\d)?\\s+(\\d{3})")
+                    .find(response)?.groupValues?.get(1)?.toIntOrNull()
+                if (code != null && code in 200..399) {
+                    Log.i(TAG, "Tunnel probe succeeded through sing-box outbound: " + host + " HTTP " + code)
+                    return null
+                }
+                throw IllegalStateException("پاسخ HTTPS نامعتبر: " + response.take(160))
             } catch (e: Exception) {
-                val detail = e.javaClass.simpleName + ": " + (e.message ?: "DNS ناموفق")
-                failures += host + ": " + detail
-                Log.w(TAG, "Tunnel probe DNS failed for " + host + ": " + detail, e)
-                continue
-            }
-            if (addresses.isEmpty()) {
-                failures += host + ": هیچ IPای دریافت نشد"
-                continue
-            }
-            for (ip in addresses) {
-                val startedAt = System.nanoTime()
-                var raw: java.net.Socket? = null
-                var tls: javax.net.ssl.SSLSocket? = null
-                try {
-                    raw = java.net.Socket()
-                    raw.connect(java.net.InetSocketAddress(ip, port), 3500)
-                    raw.soTimeout = 3500
-                    tls = (javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory)
-                        .createSocket(raw, host, port, true) as javax.net.ssl.SSLSocket
-                    tls.soTimeout = 3500
-                    val parameters = tls.sslParameters
-                    parameters.endpointIdentificationAlgorithm = "HTTPS"
-                    parameters.serverNames = listOf(javax.net.ssl.SNIHostName(host))
-                    tls.sslParameters = parameters
-                    tls.startHandshake()
-                    val request = "GET " + path + " HTTP/1.1\r\nHost: " + host +
-                        "\r\nUser-Agent: SmartVPN-Android/0.7.3\r\nConnection: close\r\n\r\n"
-                    tls.outputStream.write(request.toByteArray(Charsets.US_ASCII))
-                    tls.outputStream.flush()
-                    val statusLine = tls.inputStream.bufferedReader(Charsets.US_ASCII).readLine().orEmpty()
-                    val code = Regex("^HTTP/\\d(?:\\.\\d)?\\s+(\\d{3})")
-                        .find(statusLine)?.groupValues?.get(1)?.toIntOrNull()
-                    val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
-                    if (code != null && code in 200..399) {
-                        Log.i(TAG, "Tunnel probe succeeded: " + host + " via " +
-                            ip.hostAddress + " HTTP " + code + " in " + elapsedMs + "ms")
-                        return null
-                    }
-                    val detail = if (code != null) "HTTP " + code else
-                        "پاسخ نامعتبر: " + statusLine.take(100)
-                    failures += host + " via " + ip.hostAddress + ": " + detail +
-                        " (" + elapsedMs + "ms)"
-                    Log.w(TAG, "Tunnel probe failed: " + host + " via " + ip.hostAddress + ": " + detail)
-                } catch (e: Exception) {
-                    val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
-                    val root = rootCause(e)
-                    val detail = root.javaClass.simpleName + ": " + (root.message ?: "بدون پیام")
-                    failures += host + " via " + ip.hostAddress + ": " + detail +
-                        " (" + elapsedMs + "ms)"
-                    Log.w(TAG, "Tunnel probe failed for " + host + " via " + ip.hostAddress +
-                        " after " + elapsedMs + "ms: " + detail, e)
-                } finally {
-                    runCatching { tls?.close() }
-                    if (tls == null) runCatching { raw?.close() }
-                }
+                val root = rootCause(e)
+                val detail = root.javaClass.simpleName + ": " + (root.message ?: "بدون پیام")
+                failures += host + " [" + phase + "]: " + detail
+                Log.w(TAG, "Tunnel probe failed at " + phase + " for " + host + ": " + detail, e)
+            } finally {
+                runCatching { tls?.close() }
+                if (tls == null) runCatching { raw?.close() }
             }
         }
-        return "تأیید اینترنت از تونل ناموفق بود؛ " + failures.joinToString(" | ")
+        return "آزمون خروجی sing-box ناموفق بود؛ " + failures.joinToString(" | ")
+    }
+
+    private fun readHttpLine(input: java.io.InputStream): String {
+        val bytes = java.io.ByteArrayOutputStream()
+        while (bytes.size() < 8192) {
+            val value = input.read()
+            if (value == -1 || value == 10) break
+            if (value != 13) bytes.write(value)
+        }
+        return bytes.toString(Charsets.US_ASCII.name())
     }
 
     private fun startLibbox(config: String) {
@@ -651,5 +645,6 @@ class SingBoxVpnService : VpnService() {
         private const val NOTIFICATION_ID = 2401
         private const val PREFS = "smartvpn_storage"
         private const val KEY_RUNNING = "vpn_running"
+        private const val PROBE_PORT = 20808
     }
 }

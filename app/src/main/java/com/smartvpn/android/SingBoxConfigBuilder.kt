@@ -55,7 +55,10 @@ object SingBoxConfigBuilder {
         val tags = JSONArray()
         rawCandidates.distinct().forEachIndexed { index, raw ->
             val line = raw.trim()
-            val outbound = outboundFromLink(line)
+            // Full JSON profiles are tested through the legacy single-profile
+            // fallback; only share links can safely be merged into this group.
+            val outbound = runCatching { outboundFromLink(line) }.getOrNull()
+                ?: return@forEachIndexed
             val tag = "smartvpn-node-$index"
             outbound.put("tag", tag)
             nodes.put(outbound)

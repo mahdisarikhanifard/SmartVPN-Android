@@ -51,7 +51,6 @@ class MainActivity : Activity() {
     private val servers = mutableListOf<ServerEntry>()
     private var autoCandidates: List<ServerEntry> = emptyList()
     private var autoCandidateIndex = 0
-    private var autoGroupMode = false
     private var autoSourceIndex = 0
     private var autoSourceList: List<String> = emptyList()
     @Volatile private var autoConnecting = false
@@ -356,7 +355,6 @@ class MainActivity : Activity() {
         autoConnecting = true
         autoCandidateIndex = 0
         autoCandidates = emptyList()
-        autoGroupMode = false
         statusView.text = "در حال آماده‌سازی اتصال هوشمند…"
         EventLog.append(this, "شروع اتصال خودکار؛ منابع عمومی در حال دریافت")
         val custom = getSharedPreferences(PREFS, MODE_PRIVATE)
@@ -454,7 +452,6 @@ class MainActivity : Activity() {
         if (!autoConnecting || autoCandidates.isEmpty()) return
         try {
             val config = SingBoxConfigBuilder.buildAuto(autoCandidates.map { it.raw })
-            autoGroupMode = true
             EventLog.append(this, "شروع آزمون هم‌زمان مسیر واقعی؛ ${autoCandidates.size} outbound در گروه URLTest؛ انتخاب بر اساس تأخیر HTTPS از داخل پراکسی")
             statusView.text = "در حال آزمایش واقعی ${autoCandidates.size} سرور به‌صورت هم‌زمان؛ انتخاب سریع‌ترین مسیر سالم…"
             val permission = VpnService.prepare(this)
@@ -465,7 +462,6 @@ class MainActivity : Activity() {
                 startVpnService(config)
             }
         } catch (e: Exception) {
-            autoGroupMode = false
             EventLog.append(this, "ساخت گروه رتبه‌بندی خودکار ناموفق؛ بازگشت به آزمون تک‌سروری: ${e.javaClass.simpleName}: ${e.message}")
             connectNextRanked()
         }

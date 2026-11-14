@@ -51,6 +51,7 @@ class MainActivity : Activity() {
     private val servers = mutableListOf<ServerEntry>()
     private var autoCandidates: List<ServerEntry> = emptyList()
     private var autoCandidateIndex = 0
+    private var autoGroupMode = false
     private var autoSourceIndex = 0
     private var autoSourceList: List<String> = emptyList()
     @Volatile private var autoConnecting = false
@@ -355,6 +356,7 @@ class MainActivity : Activity() {
         autoConnecting = true
         autoCandidateIndex = 0
         autoCandidates = emptyList()
+        autoGroupMode = false
         statusView.text = "در حال آماده‌سازی اتصال هوشمند…"
         EventLog.append(this, "شروع اتصال خودکار؛ منابع عمومی در حال دریافت")
         val custom = getSharedPreferences(PREFS, MODE_PRIVATE)
@@ -427,17 +429,45 @@ class MainActivity : Activity() {
                     .thenBy { if (it.latencyMs >= 0) it.latencyMs else snapshot.indexOf(it) })
             runOnUiThread {
                 if (!autoConnecting) return@runOnUiThread
-                autoCandidates = tested
+                // Keep a small, protocol-diverse shortlist. sing-box URLTest will
+                // perform the real HTTPS proxy-path ranking across these candidates.
+                val tcpShortlist = tested.filter { it.latencyMs >= 0 }.take(7)
+                val udpShortlist = tested.filter { it.latencyMs == -2L }.take(3)
+                val shortlist = (tcpShortlist + udpShortlist).distinctBy { it.raw }
+                    .plus(tested.filter { candidate -> (tcpShortlist + udpShortlist).none { it.raw == candidate.raw } })
+                    .take(10)
+                autoCandidates = shortlist
                 autoCandidateIndex = 0
-                EventLog.append(this@MainActivity, "پایان غربالگری؛ ${tested.size} گزینه برای تلاش واقعی تونل باقی ماند")
-                if (tested.isEmpty()) {
+                EventLog.append(this@MainActivity, "پایان غربالگری اولیه؛ ${shortlist.size} گزینه متنوع برای رتبه‌بندی واقعی HTTPS در sing-box انتخاب شد (از ${tested.size} گزینه قابل دسترس)")
+                if (shortlist.isEmpty()) {
                     autoConnecting = false
-                    statusView.text = "هیچ سرور TCP قابل دسترسی و هیچ کانفیگ UDP برای آزمون پیدا نشد."
+                    statusView.text = "هیچ سرور قابل دسترسی برای آزمون واقعی پیدا نشد."
                 } else {
                     saveServers()
-                    connectNextRanked()
+                    connectAutoGroup()
                 }
             }
+        }
+    }
+
+    private fun connectAutoGroup() {
+        if (!autoConnecting || autoCandidates.isEmpty()) return
+        try {
+            val config = SingBoxConfigBuilder.buildAuto(autoCandidates.map { it.raw })
+            autoGroupMode = true
+            EventLog.append(this, "شروع آزمون هم‌زمان مسیر واقعی؛ ${autoCandidates.size} outbound در گروه URLTest؛ انتخاب بر اساس تأخیر HTTPS از داخل پراکسی")
+            statusView.text = "در حال آزمایش واقعی ${autoCandidates.size} سرور به‌صورت هم‌زمان؛ انتخاب سریع‌ترین مسیر سالم…"
+            val permission = VpnService.prepare(this)
+            if (permission != null) {
+                pendingVpnConfig = config
+                startActivityForResult(permission, REQUEST_VPN_PERMISSION)
+            } else {
+                startVpnService(config)
+            }
+        } catch (e: Exception) {
+            autoGroupMode = false
+            EventLog.append(this, "ساخت گروه رتبه‌بندی خودکار ناموفق؛ بازگشت به آزمون تک‌سروری: ${e.javaClass.simpleName}: ${e.message}")
+            connectNextRanked()
         }
     }
 

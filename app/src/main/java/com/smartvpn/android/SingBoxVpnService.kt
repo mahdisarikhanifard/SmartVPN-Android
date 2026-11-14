@@ -125,32 +125,41 @@ class SingBoxVpnService : VpnService() {
      * DNS, timeout, TLS and HTTP failures instead of reporting one generic error.
      */
     private fun verifyTunnelConnectivity(): String? {
+        // Do not rely only on Google and Cloudflare: either provider may be
+        // filtered independently of whether the proxy tunnel is working.
         val probes = listOf(
+            "https://example.com/",
+            "https://www.microsoft.com/",
             "https://cp.cloudflare.com/generate_204",
             "https://www.gstatic.com/generate_204"
         )
         val failures = mutableListOf<String>()
+        // Allow Android's VPN routes and sing-box DNS to settle after TUN creation.
+        Thread.sleep(500)
         for (address in probes) {
             var connection: java.net.HttpURLConnection? = null
+            val startedAt = System.nanoTime()
             try {
                 connection = java.net.URL(address).openConnection() as java.net.HttpURLConnection
-                connection.connectTimeout = 3500
-                connection.readTimeout = 3500
+                connection.connectTimeout = 3000
+                connection.readTimeout = 3000
                 connection.instanceFollowRedirects = true
                 connection.useCaches = false
                 connection.requestMethod = "GET"
-                connection.setRequestProperty("User-Agent", "SmartVPN-Android/0.6.9")
+                connection.setRequestProperty("User-Agent", "SmartVPN-Android/0.7.1")
                 val code = connection.responseCode
+                val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
                 if (code in 200..399) {
-                    Log.i(TAG, "Tunnel probe succeeded: $address HTTP $code")
+                    Log.i(TAG, "Tunnel probe succeeded: $address HTTP $code in ${elapsedMs}ms")
                     return null
                 }
-                failures += "${java.net.URL(address).host}: HTTP $code"
+                failures += "${java.net.URL(address).host}: HTTP $code (${elapsedMs}ms)"
             } catch (e: Exception) {
                 val cause = rootCause(e)
+                val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
                 val detail = "${cause.javaClass.simpleName}: ${cause.message ?: "بدون پیام"}"
-                failures += "${java.net.URL(address).host}: $detail"
-                Log.w(TAG, "Tunnel connectivity probe failed for $address: $detail", e)
+                failures += "${java.net.URL(address).host}: $detail (${elapsedMs}ms)"
+                Log.w(TAG, "Tunnel connectivity probe failed for $address after ${elapsedMs}ms: $detail", e)
             } finally {
                 connection?.disconnect()
             }

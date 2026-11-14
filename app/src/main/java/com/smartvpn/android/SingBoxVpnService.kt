@@ -557,10 +557,60 @@ class SingBoxVpnService : VpnService() {
                 method.invoke(listener, "", -1, false, false)
                 return
             }
-            val link = connectivity.getLinkProperties(network)
-            val capabilities = connectivity.getNetworkCapabilities(network)
+
+            var link = connectivity.getLinkProperties(network)
+            var capabilities = connectivity.getNetworkCapabilities(network)
+            val reportedName = link?.interfaceName.orEmpty()
+
+            // Android may report the VPN itself (tun0) as activeNetwork. Passing
+            // that virtual interface to sing-box makes it route its upstream through
+            // the VPN itself instead of the physical network.
+            if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true ||
+                reportedName.startsWith("tun", ignoreCase = true)) {
+                val underlay = connectivity.allNetworks.mapNotNull { candidate ->
+                    val candidateCapabilities = connectivity.getNetworkCapabilities(candidate)
+                        ?: return@mapNotNull null
+                    if (candidateCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) ||
+                        !candidateCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                        return@mapNotNull null
+                    }
+                    val candidateLink = connectivity.getLinkProperties(candidate)
+                        ?: return@mapNotNull null
+                    val candidateName = candidateLink.interfaceName ?: return@mapNotNull null
+                    val physical = runCatching {
+                        java.net.NetworkInterface.getByName(candidateName)
+                    }.getOrNull() ?: return@mapNotNull null
+                    if (physical.isLoopback || !runCatching { physical.isUp }.getOrDefault(false)) {
+                        return@mapNotNull null
+                    }
+                    Triple(candidate, candidateLink, candidateCapabilities)
+                }.sortedWith(
+                    compareByDescending<Triple<Network, android.net.LinkProperties, NetworkCapabilities>> {
+                        it.third.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                    }.thenBy {
+                        !it.third.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+                    }
+                ).firstOrNull()
+
+                if (underlay == null) {
+                    Log.w(TAG, "Active network is VPN ($reportedName), but no usable physical underlay was found")
+                    method.invoke(listener, "", -1, false, false)
+                    return
+                }
+                link = underlay.second
+                capabilities = underlay.third
+                Log.i(TAG, "Resolved VPN default interface $reportedName to physical underlay ${link.interfaceName}")
+            }
+
             val name = link?.interfaceName.orEmpty()
-            val index = runCatching { java.net.NetworkInterface.getByName(name)?.index ?: -1 }.getOrDefault(-1)
+            val index = runCatching {
+                java.net.NetworkInterface.getByName(name)?.index ?: -1
+            }.getOrDefault(-1)
+            if (name.isBlank() || index < 0) {
+                Log.w(TAG, "Ignoring invalid default interface update: name=$name index=$index")
+                method.invoke(listener, "", -1, false, false)
+                return
+            }
             val metered = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == false
             method.invoke(listener, name, index, metered, false)
         }.onFailure { Log.w(TAG, "Unable to notify sing-box about default network", it) }

@@ -282,7 +282,11 @@ class SingBoxVpnService : VpnService() {
 
     private fun establishTun(options: Any): Int {
         tun?.close()
-        val builder = Builder().setSession("SmartVPN").setMtu(readInt(options, "mtu", 9000))
+        val requestedMtu = readInt(options, "mtu", 1500)
+        // Keep mobile TUN packets within a broadly compatible MTU.
+        val safeMtu = requestedMtu.coerceIn(1280, 1500)
+        val builder = Builder().setSession("SmartVPN").setMtu(safeMtu)
+        Log.i(TAG, "TUN MTU: requested=$requestedMtu, applied=$safeMtu")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
         addAddresses(builder, readValue(options, "inet4Address"))
         addAddresses(builder, readValue(options, "inet6Address"))
@@ -350,6 +354,12 @@ class SingBoxVpnService : VpnService() {
         for (network in connectivity.allNetworks) {
             val link = connectivity.getLinkProperties(network) ?: continue
             val capabilities = connectivity.getNetworkCapabilities(network) ?: continue
+            // Exclude the VPN TUN itself: it is not an underlay and can cause recursive routing.
+            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                Log.i(TAG, "Ignoring VPN interface while enumerating underlay networks")
+                continue
+            }
+            if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) continue
             val interfaceName = link.interfaceName ?: continue
             val physical = physicalByName[interfaceName]
                 ?: runCatching { java.net.NetworkInterface.getByName(interfaceName) }.getOrNull()

@@ -25,7 +25,7 @@ object SingBoxConfigBuilder {
             line.startsWith("wireguard://", true) || line.startsWith("wg://", true) -> wireguard(line)
             line.startsWith("{") -> {
                 val parsed = JSONObject(line)
-                if (parsed.has("outbounds")) return line
+                if (parsed.has("outbounds")) return addLocalProbeInbound(parsed).toString(2)
                 throw IllegalArgumentException("JSON کانفیگ باید ساختار کامل sing-box داشته باشد.")
             }
             else -> throw IllegalArgumentException("پروتکل این کانفیگ پشتیبانی نمی‌شود.")
@@ -39,10 +39,23 @@ object SingBoxConfigBuilder {
                 .put("interface_name", "tun0")
                 .put("address", JSONArray().put("172.19.0.1/30").put("fdfe:dcba:9876::1/126"))
                 .put("mtu", 9000).put("auto_route", true).put("strict_route", true)
-                .put("stack", "system")))
+                .put("stack", "system"))
+                .put(JSONObject().put("type", "mixed").put("tag", "smartvpn-local-probe").put("listen", "127.0.0.1").put("listen_port", 20808)))
             .put("outbounds", outbounds)
             .put("route", JSONObject().put("auto_detect_interface", true).put("final", "proxy"))
             .toString(2)
+    }
+
+    private fun addLocalProbeInbound(config: JSONObject): JSONObject {
+        val inbounds = config.optJSONArray("inbounds") ?: JSONArray().also { config.put("inbounds", it) }
+        val exists = (0 until inbounds.length()).any { index ->
+            inbounds.optJSONObject(index)?.optString("tag") == "smartvpn-local-probe"
+        }
+        if (!exists) {
+            inbounds.put(JSONObject().put("type", "mixed").put("tag", "smartvpn-local-probe")
+                .put("listen", "127.0.0.1").put("listen_port", 20808))
+        }
+        return config
     }
 
     private fun vmess(link: String): JSONObject {

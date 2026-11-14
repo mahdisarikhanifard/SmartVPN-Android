@@ -268,7 +268,7 @@ class SingBoxVpnService : VpnService() {
             setProperty(setup, "basePath", filesDir.absolutePath)
             setProperty(setup, "workingPath", getExternalFilesDir(null)?.absolutePath ?: filesDir.absolutePath)
             setProperty(setup, "tempPath", cacheDir.absolutePath)
-            setProperty(setup, "debug", false)
+            setProperty(setup, "debug", true)
             setProperty(setup, "logMaxLines", 1000)
             val setupMethod = libbox.methods.firstOrNull { it.name == "setup" && it.parameterCount == 1 }
                 ?: throw IllegalStateException("libbox.setup در کتابخانه پیدا نشد")
@@ -313,7 +313,15 @@ class SingBoxVpnService : VpnService() {
                     worker.execute { runCatching { reloadLibbox(config) }.onFailure { Log.e(TAG, "reload", it) } }
                     return null
                 }
-                "writeDebugMessage" -> { Log.d(TAG, args?.firstOrNull()?.toString() ?: "libbox"); return null }
+                "writeDebugMessage" -> {
+                    val message = args?.firstOrNull()?.toString().orEmpty()
+                    val lower = message.lowercase(java.util.Locale.ROOT)
+                    if (listOf("error", "warn", "failed", "timeout", "dns", "connect", "tls", "protect", "route", "proxy").any { lower.contains(it) }) {
+                        Log.w(TAG, "sing-box: " + message.take(450))
+                        sendStatus("diagnostic", message.take(450))
+                    }
+                    return null
+                }
                 "triggerNativeCrash" -> return null
                 "connectSSHAgent" -> return -1
                 "getSystemProxyStatus" -> {
@@ -646,6 +654,7 @@ class SingBoxVpnService : VpnService() {
             "connected" -> "تونل فعال شد و عبور اینترنت تأیید شد"
             "disconnected" -> "تونل قطع شد"
             "error" -> "خطای تونل: ${error ?: "نامشخص"}"
+            "diagnostic" -> "sing-box: ${error ?: "بدون جزئیات"}"
             else -> "وضعیت سرویس: $state"
         }
         EventLog.append(this, detail)

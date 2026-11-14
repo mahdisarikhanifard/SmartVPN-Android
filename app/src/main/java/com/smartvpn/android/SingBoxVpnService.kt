@@ -146,8 +146,8 @@ class SingBoxVpnService : VpnService() {
                 raw.soTimeout = 5000
 
                 phase = "PROXY_CONNECT"
-                val request = "CONNECT " + host + ":443 HTTP/1.1\\r\\nHost: " +
-                    host + ":443\\r\\nProxy-Connection: Keep-Alive\\r\\n\\r\\n"
+                val request = "CONNECT " + host + ":443 HTTP/1.1\r\nHost: " +
+                    host + ":443\r\nProxy-Connection: Keep-Alive\r\n\r\n"
                 raw.getOutputStream().write(request.toByteArray(Charsets.US_ASCII))
                 raw.getOutputStream().flush()
                 val input = raw.getInputStream()
@@ -171,8 +171,8 @@ class SingBoxVpnService : VpnService() {
                 tls.startHandshake()
 
                 phase = "HTTPS_REQUEST"
-                val httpsRequest = "GET / HTTP/1.1\\r\\nHost: " + host +
-                    "\\r\\nUser-Agent: SmartVPN-Android/0.7.7\\r\\nConnection: close\\r\\n\\r\\n"
+                val httpsRequest = "GET / HTTP/1.1\r\nHost: " + host +
+                    "\r\nUser-Agent: SmartVPN-Android/0.7.7\r\nConnection: close\r\n\r\n"
                 tls.outputStream.write(httpsRequest.toByteArray(Charsets.US_ASCII))
                 tls.outputStream.flush()
                 val response = readHttpLine(tls.inputStream)

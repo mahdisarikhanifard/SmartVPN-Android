@@ -130,12 +130,13 @@ class SingBoxVpnService : VpnService() {
      * DNS, timeout, TLS and HTTP failures instead of reporting one generic error.
      */
     private fun verifyTunnelConnectivity(): String? {
-        // Probe through sing-box's loopback-only mixed inbound. This verifies the
-        // actual outbound without relying on Android's routing of service sockets.
-        val hosts = listOf("example.com", "www.microsoft.com")
-        val failures = mutableListOf<String>()
+        // Run both checks independently on every attempt. The local mixed inbound
+        // validates the sing-box outbound; the direct socket validates Android TUN.
         Thread.sleep(500)
-        for (host in hosts) {
+
+        val localFailures = mutableListOf<String>()
+        var localProxySucceeded = false
+        for (host in listOf("example.com", "www.microsoft.com")) {
             var raw: java.net.Socket? = null
             var tls: javax.net.ssl.SSLSocket? = null
             var phase = "LOCAL_PROXY_CONNECT"
@@ -145,13 +146,13 @@ class SingBoxVpnService : VpnService() {
                 raw.soTimeout = 5000
 
                 phase = "PROXY_CONNECT"
-                val request = "CONNECT " + host + ":443 HTTP/1.1\r\nHost: " +
-                    host + ":443\r\nProxy-Connection: Keep-Alive\r\n\r\n"
+                val request = "CONNECT " + host + ":443 HTTP/1.1\\r\\nHost: " +
+                    host + ":443\\r\\nProxy-Connection: Keep-Alive\\r\\n\\r\\n"
                 raw.getOutputStream().write(request.toByteArray(Charsets.US_ASCII))
                 raw.getOutputStream().flush()
                 val input = raw.getInputStream()
                 val statusLine = readHttpLine(input)
-                if (!statusLine.matches(Regex("HTTP/1\\.[01] 200(?: .*)?"))) {
+                if (!statusLine.matches(Regex("HTTP/1\\\\.[01] 200(?: .*)?"))) {
                     throw IllegalStateException("پاسخ CONNECT ناموفق: " + statusLine.take(160))
                 }
                 while (true) {
@@ -170,32 +171,44 @@ class SingBoxVpnService : VpnService() {
                 tls.startHandshake()
 
                 phase = "HTTPS_REQUEST"
-                val httpsRequest = "GET / HTTP/1.1\r\nHost: " + host +
-                    "\r\nUser-Agent: SmartVPN-Android/0.7.4\r\nConnection: close\r\n\r\n"
+                val httpsRequest = "GET / HTTP/1.1\\r\\nHost: " + host +
+                    "\\r\\nUser-Agent: SmartVPN-Android/0.7.7\\r\\nConnection: close\\r\\n\\r\\n"
                 tls.outputStream.write(httpsRequest.toByteArray(Charsets.US_ASCII))
                 tls.outputStream.flush()
                 val response = readHttpLine(tls.inputStream)
-                val code = Regex("^HTTP/\\d(?:\\.\\d)?\\s+(\\d{3})")
+                val code = Regex("^HTTP/\\\\d(?:\\\\.\\\\d)?\\\\s+(\\\\d{3})")
                     .find(response)?.groupValues?.get(1)?.toIntOrNull()
                 if (code != null && code in 200..399) {
-                    Log.i(TAG, "Tunnel probe succeeded through sing-box outbound: " + host + " HTTP " + code)
-                    return null
+                    Log.i(TAG, "Local sing-box outbound probe succeeded: " + host + " HTTP " + code)
+                    localProxySucceeded = true
+                    break
                 }
                 throw IllegalStateException("پاسخ HTTPS نامعتبر: " + response.take(160))
             } catch (e: Exception) {
                 val root = rootCause(e)
                 val detail = root.javaClass.simpleName + ": " + (root.message ?: "بدون پیام")
-                failures += host + " [" + phase + "]: " + detail
-                Log.w(TAG, "Tunnel probe failed at " + phase + " for " + host + ": " + detail, e)
+                localFailures += host + " [" + phase + "]: " + detail
+                Log.w(TAG, "Local sing-box outbound probe failed at " + phase + " for " + host + ": " + detail, e)
             } finally {
                 runCatching { tls?.close() }
                 if (tls == null) runCatching { raw?.close() }
             }
         }
-        if (failures.isNotEmpty()) {
-            return "آزمون خروجی sing-box ناموفق بود؛ " + failures.joinToString(" | ")
+
+        // Do not return early when the local proxy fails: this test is deliberately
+        // independent and must still tell us whether Android routes traffic through TUN.
+        val tunFailure = verifyAndroidTunRouting()
+        if (localProxySucceeded && tunFailure == null) {
+            Log.i(TAG, "Both local outbound and Android TUN connectivity probes succeeded")
+            return null
         }
-        return verifyAndroidTunRouting()
+
+        val failures = mutableListOf<String>()
+        if (!localProxySucceeded) {
+            failures += "آزمون خروجی محلی sing-box ناموفق بود؛ " + localFailures.joinToString(" | ")
+        }
+        if (tunFailure != null) failures += tunFailure
+        return failures.joinToString(" || ")
     }
 
     private fun verifyAndroidTunRouting(): String? {

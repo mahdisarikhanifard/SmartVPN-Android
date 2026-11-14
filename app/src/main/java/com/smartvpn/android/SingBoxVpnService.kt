@@ -192,7 +192,61 @@ class SingBoxVpnService : VpnService() {
                 if (tls == null) runCatching { raw?.close() }
             }
         }
-        return "آزمون خروجی sing-box ناموفق بود؛ " + failures.joinToString(" | ")
+        if (failures.isNotEmpty()) {
+            return "آزمون خروجی sing-box ناموفق بود؛ " + failures.joinToString(" | ")
+        }
+        return verifyAndroidTunRouting()
+    }
+
+    private fun verifyAndroidTunRouting(): String? {
+        // The local mixed-inbound probe proves the proxy outbound works.
+        // This second probe independently verifies Android traffic through TUN.
+        val host = "example.com"
+        var raw: java.net.Socket? = null
+        var tls: javax.net.ssl.SSLSocket? = null
+        var phase = "ANDROID_TUN_DNS"
+        try {
+            val ip = java.net.InetAddress.getAllByName(host)
+                .sortedBy { if (it is java.net.Inet4Address) 0 else 1 }
+                .firstOrNull() ?: throw IllegalStateException("DNS هیچ IPای برنگرداند")
+            phase = "ANDROID_TUN_CONNECT"
+            raw = java.net.Socket()
+            raw.connect(java.net.InetSocketAddress(ip, 443), 5000)
+            raw.soTimeout = 5000
+
+            phase = "ANDROID_TUN_TLS"
+            tls = (javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory)
+                .createSocket(raw, host, 443, true) as javax.net.ssl.SSLSocket
+            tls.soTimeout = 5000
+            val parameters = tls.sslParameters
+            parameters.endpointIdentificationAlgorithm = "HTTPS"
+            parameters.serverNames = listOf(javax.net.ssl.SNIHostName(host))
+            tls.sslParameters = parameters
+            tls.startHandshake()
+
+            phase = "ANDROID_TUN_HTTPS"
+            val request = "GET / HTTP/1.1\\r\\nHost: " + host +
+                "\\r\\nUser-Agent: SmartVPN-Android/0.7.4-TUN\\r\\nConnection: close\\r\\n\\r\\n"
+            tls.outputStream.write(request.toByteArray(Charsets.US_ASCII))
+            tls.outputStream.flush()
+            val response = readHttpLine(tls.inputStream)
+            val code = Regex("^HTTP/\\\\d(?:\\\\.\\\\d)?\\\\s+(\\\\d{3})")
+                .find(response)?.groupValues?.get(1)?.toIntOrNull()
+            if (code != null && code in 200..399) {
+                Log.i(TAG, "Android TUN routing probe succeeded: " + host + " HTTP " + code)
+                return null
+            }
+            throw IllegalStateException("پاسخ HTTPS نامعتبر: " + response.take(160))
+        } catch (e: Exception) {
+            val root = rootCause(e)
+            val detail = root.javaClass.simpleName + ": " + (root.message ?: "بدون پیام")
+            Log.w(TAG, "Android TUN routing probe failed at " + phase + ": " + detail, e)
+            return "پروکسی پاسخ داد، اما آزمون مسیر TUN اندروید در مرحله " +
+                phase + " شکست خورد: " + detail
+        } finally {
+            runCatching { tls?.close() }
+            if (tls == null) runCatching { raw?.close() }
+        }
     }
 
     private fun readHttpLine(input: java.io.InputStream): String {

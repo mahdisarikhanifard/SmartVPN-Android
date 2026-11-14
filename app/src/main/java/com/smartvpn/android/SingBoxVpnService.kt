@@ -5,6 +5,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.system.OsConstants
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
@@ -24,6 +28,7 @@ import java.util.concurrent.Executors
 class SingBoxVpnService : VpnService() {
     private val worker = Executors.newSingleThreadExecutor()
     @Volatile private var commandServer: Any? = null
+    @Volatile private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
     @Volatile private var platformProxy: Any? = null
     @Volatile private var activeConfig: String? = null
     @Volatile private var tun: ParcelFileDescriptor? = null
@@ -254,7 +259,15 @@ class SingBoxVpnService : VpnService() {
                 "usePlatformAutoDetectInterfaceControl" -> return true
                 "underNetworkExtension", "includeAllNetworks", "usePlatformShell",
                 "usePlatformBridge", "usePlatformAutoRedirect" -> return false
-                "startDefaultInterfaceMonitor", "closeDefaultInterfaceMonitor",
+                "startDefaultInterfaceMonitor" -> {
+                    val listener = args?.firstOrNull() ?: return null
+                    startDefaultInterfaceMonitor(listener)
+                    return null
+                }
+                "closeDefaultInterfaceMonitor" -> {
+                    closeDefaultInterfaceMonitor()
+                    return null
+                }
                 "clearDNSCache", "registerMyInterface", "closeNeighborMonitor" -> return null
                 "getInterfaces" -> return networkInterfacesProxy()
                 "findConnectionOwner" -> {
@@ -318,30 +331,74 @@ class SingBoxVpnService : VpnService() {
     private fun hasAddresses(options: Any, name: String) = hasNext(readValue(options, name))
     private fun hasRoutes(options: Any, name: String) = hasNext(readValue(options, name))
 
+    /**
+     * Expose Android's actual active network metadata to libbox. Enumerating
+     * java.net.NetworkInterface alone is insufficient: it does not provide
+     * Android DNS servers, default gateways, transport type or metering state.
+     */
     private fun networkInterfacesProxy(): Any {
         val entries = mutableListOf<Any>()
-        val type = Class.forName("io.nekohasekai.libbox.NetworkInterface")
-        val all = java.net.NetworkInterface.getNetworkInterfaces()
-        while (all != null && all.hasMoreElements()) {
-            val physical = all.nextElement()
+        val itemType = Class.forName("io.nekohasekai.libbox.NetworkInterface")
+        val connectivity = getSystemService(ConnectivityManager::class.java)
+        val physicalByName = mutableMapOf<String, java.net.NetworkInterface>()
+        val allPhysical = java.net.NetworkInterface.getNetworkInterfaces()
+        while (allPhysical != null && allPhysical.hasMoreElements()) {
+            val physical = allPhysical.nextElement()
+            physicalByName[physical.name] = physical
+        }
+
+        for (network in connectivity.allNetworks) {
+            val link = connectivity.getLinkProperties(network) ?: continue
+            val capabilities = connectivity.getNetworkCapabilities(network) ?: continue
+            val interfaceName = link.interfaceName ?: continue
+            val physical = physicalByName[interfaceName]
+                ?: runCatching { java.net.NetworkInterface.getByName(interfaceName) }.getOrNull()
+                ?: continue
             if (physical.isLoopback || !runCatching { physical.isUp }.getOrDefault(false)) continue
-            val item = type.getDeclaredConstructor().newInstance()
-            setProperty(item, "name", physical.name)
+
+            val item = itemType.getDeclaredConstructor().newInstance()
+            setProperty(item, "name", interfaceName)
             setProperty(item, "index", physical.index)
             setProperty(item, "mtu", runCatching { physical.mtu }.getOrDefault(1500))
+
             val addresses = physical.interfaceAddresses.mapNotNull { entry ->
-                val address = entry.address?.hostAddress ?: return@mapNotNull null
+                val address = entry.address?.hostAddress?.substringBefore('%') ?: return@mapNotNull null
                 "$address/${entry.networkPrefixLength}"
             }
+            val dnsServers = link.dnsServers.mapNotNull { it.hostAddress?.substringBefore('%') }
+            val searchDomains = link.domains?.split(' ')?.filter { it.isNotBlank() }.orEmpty()
+            val gateways = link.routes
+                .filter { it.destination.prefixLength == 0 }
+                .mapNotNull { route -> route.gateway?.takeUnless { it.isAnyLocalAddress }?.hostAddress?.substringBefore('%') }
+
+            var flags = 0
+            if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                flags = flags or OsConstants.IFF_UP or OsConstants.IFF_RUNNING
+            }
+            if (physical.isLoopback) flags = flags or OsConstants.IFF_LOOPBACK
+            if (physical.isPointToPoint) flags = flags or OsConstants.IFF_POINTOPOINT
+            if (runCatching { physical.supportsMulticast() }.getOrDefault(false)) {
+                flags = flags or OsConstants.IFF_MULTICAST
+            }
+
+            val interfaceType = when {
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> libboxInterfaceType("InterfaceTypeWIFI")
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> libboxInterfaceType("InterfaceTypeCellular")
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> libboxInterfaceType("InterfaceTypeEthernet")
+                else -> libboxInterfaceType("InterfaceTypeOther")
+            }
+
             setProperty(item, "addresses", stringIteratorProxy(addresses))
-            setProperty(item, "dnsServer", stringIteratorProxy(emptyList()))
-            setProperty(item, "dnsSearchDomain", stringIteratorProxy(emptyList()))
-            setProperty(item, "gateway", stringIteratorProxy(emptyList()))
-            setProperty(item, "flags", 65)
-            setProperty(item, "metered", false)
-            setProperty(item, "type", 0)
+            setProperty(item, "dnsServer", stringIteratorProxy(dnsServers))
+            setProperty(item, "dnsSearchDomain", stringIteratorProxy(searchDomains))
+            setProperty(item, "gateway", stringIteratorProxy(gateways))
+            setProperty(item, "flags", flags)
+            setProperty(item, "metered", !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED))
+            setProperty(item, "type", interfaceType)
             entries.add(item)
+            Log.i(TAG, "Underlying network interface: $interfaceName; addresses=${addresses.size}, DNS=${dnsServers.size}, gateways=${gateways.size}, type=$interfaceType")
         }
+
         val iteratorType = Class.forName("io.nekohasekai.libbox.NetworkInterfaceIterator")
         val iterator = entries.iterator()
         return Proxy.newProxyInstance(classLoader, arrayOf(iteratorType)) { _, method, _ ->
@@ -351,6 +408,57 @@ class SingBoxVpnService : VpnService() {
                 else -> defaultValue(method.returnType)
             }
         }
+    }
+
+    private fun libboxInterfaceType(fieldName: String): Int = runCatching {
+        Class.forName("io.nekohasekai.libbox.Libbox").getField(fieldName).getInt(null)
+    }.getOrDefault(0)
+
+    private fun startDefaultInterfaceMonitor(listener: Any) {
+        val connectivity = getSystemService(ConnectivityManager::class.java)
+        closeDefaultInterfaceMonitor()
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                notifyDefaultInterface(listener, network, connectivity)
+            }
+
+            override fun onLost(network: Network) {
+                notifyDefaultInterface(listener, connectivity.activeNetwork, connectivity)
+            }
+
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                if (network == connectivity.activeNetwork) {
+                    notifyDefaultInterface(listener, network, connectivity)
+                }
+            }
+        }
+        defaultNetworkCallback = callback
+        connectivity.registerDefaultNetworkCallback(callback)
+        notifyDefaultInterface(listener, connectivity.activeNetwork, connectivity)
+    }
+
+    private fun closeDefaultInterfaceMonitor() {
+        val callback = defaultNetworkCallback ?: return
+        runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(callback) }
+        defaultNetworkCallback = null
+    }
+
+    private fun notifyDefaultInterface(listener: Any, network: Network?, connectivity: ConnectivityManager) {
+        runCatching {
+            val method = listener.javaClass.methods.firstOrNull {
+                it.name == "updateDefaultInterface" && it.parameterCount == 4
+            } ?: return
+            if (network == null) {
+                method.invoke(listener, "", -1, false, false)
+                return
+            }
+            val link = connectivity.getLinkProperties(network)
+            val capabilities = connectivity.getNetworkCapabilities(network)
+            val name = link?.interfaceName.orEmpty()
+            val index = runCatching { java.net.NetworkInterface.getByName(name)?.index ?: -1 }.getOrDefault(-1)
+            val metered = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == false
+            method.invoke(listener, name, index, metered, false)
+        }.onFailure { Log.w(TAG, "Unable to notify sing-box about default network", it) }
     }
 
     private fun stringIteratorProxy(values: List<String>): Any {
@@ -478,6 +586,7 @@ class SingBoxVpnService : VpnService() {
     override fun onDestroy() {
         operationGeneration += 1
         stopTunnel(notifyDisconnected = false)
+        closeDefaultInterfaceMonitor()
         worker.shutdownNow()
         super.onDestroy()
     }

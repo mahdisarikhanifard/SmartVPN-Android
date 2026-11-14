@@ -364,10 +364,10 @@ class MainActivity : Activity() {
             if (custom != DEFAULT_AUTO_SOURCE) add(custom)
             add(DEFAULT_AUTO_SOURCE)
             add("https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/best.txt")
-            add("https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/verified/configs.txt")
-            add("https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/fast/configs.txt")
-            add("https://raw.githubusercontent.com/3000S-HTTP/sNSub/main/output/best59.txt")
-            add("https://raw.githubusercontent.com/chaishpish/free_server_v2ray/main/%40TFMTProto")
+            add("https://cdn.jsdelivr.net/gh/0xRadikal/Free-v2ray-Configs@main/verified/configs.txt")
+            add("https://cdn.jsdelivr.net/gh/0xRadikal/Free-v2ray-Configs@main/fast/configs.txt")
+            add("https://cdn.jsdelivr.net/gh/3000S-HTTP/sNSub@main/output/best59.txt")
+            add("https://cdn.jsdelivr.net/gh/chaishpish/free_server_v2ray@main/%40TFMTProto")
         }.distinct()
         autoSourceIndex = 0
         fetchNextAutoSource()
@@ -756,6 +756,6 @@ class MainActivity : Activity() {
         private const val PREFS = "smartvpn_storage"
         private const val KEY_SERVERS = "servers"
         private const val KEY_AUTO_SOURCE = "auto_source"
-        private const val DEFAULT_AUTO_SOURCE = "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt"
+        private const val DEFAULT_AUTO_SOURCE = "https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/best.txt"
     }
 }

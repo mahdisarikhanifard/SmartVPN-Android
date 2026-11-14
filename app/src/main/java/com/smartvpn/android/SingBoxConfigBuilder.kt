@@ -45,6 +45,64 @@ object SingBoxConfigBuilder {
             .toString(2)
     }
 
+    /**
+     * Build one live sing-box profile containing a URLTest group. sing-box tests
+     * each outbound through a real HTTPS request and selects the lowest measured
+     * proxy-path delay; raw TCP port latency is only used to shortlist candidates.
+     */
+    fun buildAuto(rawCandidates: List<String>): String {
+        val nodes = JSONArray()
+        val tags = JSONArray()
+        rawCandidates.distinct().forEachIndexed { index, raw ->
+            val line = raw.trim()
+            val outbound = outboundFromLink(line)
+            val tag = "smartvpn-node-$index"
+            outbound.put("tag", tag)
+            nodes.put(outbound)
+            tags.put(tag)
+        }
+        require(nodes.length() > 0) { "هیچ کانفیگ لینک‌محور قابل ساختی برای آزمون خودکار وجود ندارد." }
+        nodes.put(JSONObject()
+            .put("type", "urltest")
+            .put("tag", "auto")
+            .put("outbounds", tags)
+            .put("url", "https://www.gstatic.com/generate_204")
+            .put("interval", "30s")
+            .put("tolerance", 1)
+            .put("idle_timeout", "5m")
+            .put("interrupt_exist_connections", false))
+        nodes.put(JSONObject().put("type", "direct").put("tag", "direct"))
+        return JSONObject()
+            .put("log", JSONObject().put("level", "debug").put("timestamp", true))
+            .put("dns", JSONObject()
+                .put("servers", JSONArray().put(JSONObject()
+                    .put("type", "https").put("tag", "remote-dns")
+                    .put("server", "1.1.1.1").put("path", "/dns-query")
+                    .put("detour", "direct")))
+                .put("final", "remote-dns").put("strategy", "prefer_ipv4"))
+            .put("inbounds", JSONArray()
+                .put(JSONObject()
+                    .put("type", "tun").put("tag", "tun-in")
+                    .put("address", JSONArray().put("172.19.0.1/30").put("fdfe:dcba:9876::1/126"))
+                    .put("mtu", 1500).put("auto_route", true).put("stack", "system"))
+                .put(JSONObject().put("type", "mixed").put("tag", "smartvpn-local-probe")
+                    .put("listen", "127.0.0.1").put("listen_port", 20808)))
+            .put("outbounds", nodes)
+            .put("route", JSONObject().put("auto_detect_interface", true).put("final", "auto"))
+            .toString(2)
+    }
+
+    private fun outboundFromLink(line: String): JSONObject = when {
+        line.startsWith("vmess://", true) -> vmess(line)
+        line.startsWith("vless://", true) -> uriOutbound(line, "vless")
+        line.startsWith("trojan://", true) -> uriOutbound(line, "trojan")
+        line.startsWith("ss://", true) -> shadowsocks(line)
+        line.startsWith("hysteria2://", true) || line.startsWith("hy2://", true) -> uriOutbound(line, "hysteria2")
+        line.startsWith("tuic://", true) -> uriOutbound(line, "tuic")
+        line.startsWith("wireguard://", true) || line.startsWith("wg://", true) -> wireguard(line)
+        else -> throw IllegalArgumentException("قالب کانفیگ برای گروه خودکار پشتیبانی نمی‌شود.")
+    }
+
     private fun addLocalProbeInbound(config: JSONObject): JSONObject {
         val inbounds = config.optJSONArray("inbounds") ?: JSONArray().also { config.put("inbounds", it) }
         val exists = (0 until inbounds.length()).any { index ->

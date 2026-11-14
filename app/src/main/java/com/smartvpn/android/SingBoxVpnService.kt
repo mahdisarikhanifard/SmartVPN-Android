@@ -225,12 +225,12 @@ class SingBoxVpnService : VpnService() {
             tls.startHandshake()
 
             phase = "ANDROID_TUN_HTTPS"
-            val request = "GET / HTTP/1.1\\r\\nHost: " + host +
-                "\\r\\nUser-Agent: SmartVPN-Android/0.7.4-TUN\\r\\nConnection: close\\r\\n\\r\\n"
+            val request = "GET / HTTP/1.1\r\nHost: " + host +
+                "\r\nUser-Agent: SmartVPN-Android/0.7.4-TUN\r\nConnection: close\r\n\r\n"
             tls.outputStream.write(request.toByteArray(Charsets.US_ASCII))
             tls.outputStream.flush()
             val response = readHttpLine(tls.inputStream)
-            val code = Regex("^HTTP/\\\\d(?:\\\\.\\\\d)?\\\\s+(\\\\d{3})")
+            val code = Regex("^HTTP/\\d(?:\\.\\d)?\\s+(\\d{3})")
                 .find(response)?.groupValues?.get(1)?.toIntOrNull()
             if (code != null && code in 200..399) {
                 Log.i(TAG, "Android TUN routing probe succeeded: " + host + " HTTP " + code)

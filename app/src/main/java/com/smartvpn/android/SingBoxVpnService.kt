@@ -152,7 +152,7 @@ class SingBoxVpnService : VpnService() {
                 raw.getOutputStream().flush()
                 val input = raw.getInputStream()
                 val statusLine = readHttpLine(input)
-                if (!statusLine.matches(Regex("HTTP/1\\\\.[01] 200(?: .*)?"))) {
+                if (!statusLine.matches(Regex("""^HTTP/1\.[01]\s+2\d\d(?:\s.*)?$"""))) {
                     throw IllegalStateException("پاسخ CONNECT ناموفق: " + statusLine.take(160))
                 }
                 while (true) {
@@ -212,17 +212,14 @@ class SingBoxVpnService : VpnService() {
     }
 
     private fun verifyAndroidTunRouting(): String? {
-        // The local mixed-inbound probe proves the proxy outbound works.
-        // This second probe independently verifies Android traffic through TUN.
-        val host = "example.com"
+        // Use a numeric IPv4 endpoint so this test does not depend on Android DNS.
+        // DNS is already exercised by the local sing-box proxy probe above.
+        val host = "one.one.one.one"
         var raw: java.net.Socket? = null
         var tls: javax.net.ssl.SSLSocket? = null
-        var phase = "ANDROID_TUN_DNS"
+        var phase = "ANDROID_TUN_CONNECT"
         try {
-            val ip = java.net.InetAddress.getAllByName(host)
-                .sortedBy { if (it is java.net.Inet4Address) 0 else 1 }
-                .firstOrNull() ?: throw IllegalStateException("DNS هیچ IPای برنگرداند")
-            phase = "ANDROID_TUN_CONNECT"
+            val ip = java.net.InetAddress.getByAddress(byteArrayOf(1, 1, 1, 1))
             raw = java.net.Socket()
             raw.connect(java.net.InetSocketAddress(ip, 443), 5000)
             raw.soTimeout = 5000
@@ -238,12 +235,12 @@ class SingBoxVpnService : VpnService() {
             tls.startHandshake()
 
             phase = "ANDROID_TUN_HTTPS"
-            val request = "GET / HTTP/1.1\r\nHost: " + host +
-                "\r\nUser-Agent: SmartVPN-Android/0.7.4-TUN\r\nConnection: close\r\n\r\n"
+            val request = "GET / HTTP/1.1\\r\\nHost: " + host +
+                "\\r\\nUser-Agent: SmartVPN-Android/0.7.8-TUN\\r\\nConnection: close\\r\\n\\r\\n"
             tls.outputStream.write(request.toByteArray(Charsets.US_ASCII))
             tls.outputStream.flush()
             val response = readHttpLine(tls.inputStream)
-            val code = Regex("^HTTP/\\d(?:\\.\\d)?\\s+(\\d{3})")
+            val code = Regex("""^HTTP/\\d(?:\\.\\d)?\\s+(\\d{3})""")
                 .find(response)?.groupValues?.get(1)?.toIntOrNull()
             if (code != null && code in 200..399) {
                 Log.i(TAG, "Android TUN routing probe succeeded: " + host + " HTTP " + code)
@@ -254,7 +251,7 @@ class SingBoxVpnService : VpnService() {
             val root = rootCause(e)
             val detail = root.javaClass.simpleName + ": " + (root.message ?: "بدون پیام")
             Log.w(TAG, "Android TUN routing probe failed at " + phase + ": " + detail, e)
-            return "پروکسی پاسخ داد، اما آزمون مسیر TUN اندروید در مرحله " +
+            return "آزمون مستقل مسیر TUN اندروید در مرحله " +
                 phase + " شکست خورد: " + detail
         } finally {
             runCatching { tls?.close() }

@@ -15,6 +15,10 @@ import java.nio.charset.StandardCharsets
 object SingBoxConfigBuilder {
     fun build(raw: String): String {
         val line = raw.trim()
+        if (line.contains("[Interface]", ignoreCase = true) &&
+            line.contains("[Peer]", ignoreCase = true)) {
+            return buildWireGuardIni(line)
+        }
         val outbound = when {
             line.startsWith("vmess://", true) -> vmess(line)
             line.startsWith("vless://", true) -> uriOutbound(line, "vless")
@@ -212,6 +216,105 @@ object SingBoxConfigBuilder {
             .put("server", host).put("server_port", uri.port)
             .put("method", credentials.substring(0, split))
             .put("password", credentials.substring(split + 1))
+    }
+
+    /**
+     * Import a standard WireGuard .conf/.txt profile (for example Proton VPN).
+     * The private key is only read locally and placed into the in-memory
+     * sing-box configuration; it is never logged or transmitted by this code.
+     *
+     * sing-box 1.14.x uses WireGuard endpoints rather than the removed
+     * WireGuard outbound type.
+     */
+    private fun buildWireGuardIni(text: String): String {
+        val sections = linkedMapOf<String, MutableMap<String, String>>()
+        var current = ""
+        text.lineSequence().forEach { source ->
+            val line = source.trim()
+            if (line.isEmpty() || line.startsWith("#") || line.startsWith(";")) return@forEach
+            if (line.startsWith("[") && line.endsWith("]")) {
+                current = line.substring(1, line.length - 1).trim().lowercase()
+                sections.getOrPut(current) { linkedMapOf() }
+                return@forEach
+            }
+            val equals = line.indexOf('=')
+            if (equals > 0 && current.isNotBlank()) {
+                val key = line.substring(0, equals).trim().lowercase()
+                val value = line.substring(equals + 1).substringBefore("#").trim()
+                sections.getOrPut(current) { linkedMapOf() }[key] = value
+            }
+        }
+
+        val iface = sections["interface"] ?: throw IllegalArgumentException("بخش [Interface] در فایل WireGuard پیدا نشد.")
+        val peer = sections["peer"] ?: throw IllegalArgumentException("بخش [Peer] در فایل WireGuard پیدا نشد.")
+        val privateKey = iface["privatekey"].orEmpty()
+        val localAddresses = iface["address"].orEmpty().split(',').map { it.trim() }.filter { it.isNotBlank() }
+        val endpoint = peer["endpoint"].orEmpty()
+        val publicKey = peer["publickey"].orEmpty()
+        val allowedIps = peer["allowedips"].orEmpty().split(',').map { it.trim() }.filter { it.isNotBlank() }
+        require(privateKey.isNotBlank()) { "کلید خصوصی در بخش [Interface] وجود ندارد." }
+        require(localAddresses.isNotEmpty()) { "آدرس داخلی Address در فایل WireGuard وجود ندارد." }
+        require(publicKey.isNotBlank()) { "کلید عمومی Peer در فایل WireGuard وجود ندارد." }
+        require(allowedIps.isNotEmpty()) { "AllowedIPs در بخش [Peer] وجود ندارد." }
+        require(endpoint.isNotBlank()) { "Endpoint در بخش [Peer] وجود ندارد." }
+
+        val server: String
+        val port: Int
+        if (endpoint.startsWith("[")) {
+            val close = endpoint.indexOf(']')
+            require(close > 1 && close + 2 < endpoint.length && endpoint[close + 1] == ':') {
+                "قالب IPv6 در Endpoint معتبر نیست."
+            }
+            server = endpoint.substring(1, close)
+            port = endpoint.substring(close + 2).toIntOrNull() ?: 0
+        } else {
+            val split = endpoint.lastIndexOf(':')
+            require(split > 0) { "Endpoint باید به شکل host:port باشد." }
+            server = endpoint.substring(0, split)
+            port = endpoint.substring(split + 1).toIntOrNull() ?: 0
+        }
+        require(server.isNotBlank() && port in 1..65535) { "نشانی یا پورت Endpoint معتبر نیست." }
+
+        val peerConfig = JSONObject()
+            .put("address", server)
+            .put("port", port)
+            .put("public_key", publicKey)
+            .put("allowed_ips", JSONArray(allowedIps))
+        peer["presharedkey"]?.takeIf { it.isNotBlank() }?.let { peerConfig.put("pre_shared_key", it) }
+        peer["persistentkeepalive"]?.toIntOrNull()?.takeIf { it > 0 }?.let {
+            peerConfig.put("persistent_keepalive_interval", it)
+        }
+
+        val endpointConfig = JSONObject()
+            .put("type", "wireguard")
+            .put("tag", "proton-wireguard")
+            .put("mtu", iface["mtu"]?.toIntOrNull()?.coerceIn(1280, 1500) ?: 1408)
+            .put("address", JSONArray(localAddresses))
+            .put("private_key", privateKey)
+            .put("peers", JSONArray().put(peerConfig))
+
+        val dnsServer = iface["dns"]?.split(',')?.map { it.trim() }?.firstOrNull { it.isNotBlank() } ?: "1.1.1.1"
+        return JSONObject()
+            .put("log", JSONObject().put("level", "debug").put("timestamp", true))
+            .put("dns", JSONObject()
+                .put("servers", JSONArray().put(JSONObject()
+                    .put("type", "udp").put("tag", "wireguard-dns")
+                    .put("server", dnsServer).put("server_port", 53)
+                    .put("detour", "proton-wireguard")))
+                .put("final", "wireguard-dns").put("strategy", "prefer_ipv4"))
+            .put("inbounds", JSONArray()
+                .put(JSONObject()
+                    .put("type", "tun").put("tag", "tun-in")
+                    .put("address", JSONArray().put("172.19.0.1/30").put("fdfe:dcba:9876::1/126"))
+                    .put("mtu", 1408).put("auto_route", true).put("stack", "system"))
+                .put(JSONObject().put("type", "mixed").put("tag", "smartvpn-local-probe")
+                    .put("listen", "127.0.0.1").put("listen_port", 20808)))
+            .put("outbounds", JSONArray().put(JSONObject().put("type", "direct").put("tag", "direct")))
+            .put("endpoints", JSONArray().put(endpointConfig))
+            .put("route", JSONObject()
+                .put("auto_detect_interface", true)
+                .put("final", "proton-wireguard"))
+            .toString(2)
     }
 
     private fun wireguard(link: String): JSONObject {

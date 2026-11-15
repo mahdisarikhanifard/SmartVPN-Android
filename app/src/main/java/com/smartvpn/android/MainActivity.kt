@@ -52,6 +52,7 @@ class MainActivity : Activity() {
     private var autoCandidates: List<ServerEntry> = emptyList()
     private var autoCandidateIndex = 0
     private var autoSourceIndex = 0
+    private var autoSourcesPending = 0
     private var autoSourceList: List<String> = emptyList()
     @Volatile private var autoConnecting = false
     private lateinit var root: LinearLayout
@@ -380,17 +381,27 @@ class MainActivity : Activity() {
     }
 
     private fun fetchNextAutoSource() {
-        if (!autoConnecting) return
-        if (autoSourceIndex >= autoSourceList.size) {
-            statusView.text = "دریافت منابع تمام شد؛ ${servers.size} کانفیگ یکتا برای بررسی پیدا شد."
-            EventLog.append(this, "پایان دریافت منابع؛ ${servers.size} کانفیگ یکتا آماده بررسی است")
-            rankAndConnectAutomatically()
+        if (!autoConnecting || autoSourcesPending > 0) return
+        // Fetch feeds concurrently (the IO executor caps concurrency at four).
+        // Serial 25-second network timeouts made seven sources take several minutes.
+        autoSourcesPending = autoSourceList.size
+        if (autoSourcesPending == 0) {
+            finishAutoSourceFetch()
             return
         }
-        val address = autoSourceList[autoSourceIndex++]
-        statusView.text = "در حال دریافت منبع ${autoSourceIndex} از ${autoSourceList.size}…"
-        EventLog.append(this, "دریافت منبع ${autoSourceIndex}/${autoSourceList.size}: ${runCatching { URL(address).host }.getOrDefault("منبع سفارشی")}")
-        fetchSubscription(address, true)
+        autoSourceList.forEachIndexed { index, address ->
+            EventLog.append(this, "دریافت موازی منبع ${index + 1}/${autoSourceList.size}: ${runCatching { URL(address).host }.getOrDefault("منبع سفارشی")}")
+            fetchSubscription(address, true)
+        }
+        statusView.text = "در حال دریافت هم‌زمان ${autoSourceList.size} منبع؛ حداکثر چهار درخواست به‌صورت موازی…"
+    }
+
+    private fun finishAutoSourceFetch() {
+        if (!autoConnecting) return
+        autoSourcesPending = 0
+        statusView.text = "دریافت منابع تمام شد؛ ${servers.size} کانفیگ یکتا برای بررسی پیدا شد."
+        EventLog.append(this, "پایان دریافت همه منابع؛ ${servers.size} کانفیگ یکتا آماده بررسی است")
+        rankAndConnectAutomatically()
     }
 
     private fun rankAndConnectAutomatically() {
@@ -560,8 +571,8 @@ class MainActivity : Activity() {
         io.execute {
             try {
                 val connection = URL(address).openConnection() as HttpURLConnection
-                connection.connectTimeout = 10000
-                connection.readTimeout = 15000
+                connection.connectTimeout = 6000
+                connection.readTimeout = 9000
                 connection.instanceFollowRedirects = true
                 connection.setRequestProperty("User-Agent", "SmartVPN-Android/0.2")
                 val body = connection.inputStream.bufferedReader().use { it.readText() }
@@ -569,20 +580,23 @@ class MainActivity : Activity() {
                 val parseBody = if (forAutoConnect && body.contains("://")) {
                     body.lineSequence().take(900).joinToString("\n")
                 } else body
-                val count = addParsedContent(parseBody)
+                val count = synchronized(servers) { addParsedContent(parseBody) }
                 EventLog.append(this, "دریافت منبع موفق؛ حجم پاسخ ${body.toByteArray().size} بایت؛ کانفیگ جدید $count؛ میزبان ${runCatching { URL(address).host }.getOrDefault("نامشخص")}")
                 runOnUiThread {
                     renderServers()
                     saveServers()
                     if (forAutoConnect) {
-                        fetchNextAutoSource()
+                        autoSourcesPending = (autoSourcesPending - 1).coerceAtLeast(0)
+                        if (autoSourcesPending == 0) finishAutoSourceFetch()
                     } else statusView.text = "دریافت تمام شد؛ $count کانفیگ جدید شناسایی شد"
                 }
             } catch (e: Exception) {
                 EventLog.append(this, "خطا در دریافت منبع ${runCatching { URL(address).host }.getOrDefault("نامشخص")}: ${e.javaClass.simpleName}: ${e.localizedMessage ?: "بدون توضیح"}")
                 runOnUiThread {
-                    if (forAutoConnect) fetchNextAutoSource()
-                    else statusView.text = "خطا در دریافت اشتراک: ${e.localizedMessage}"
+                    if (forAutoConnect) {
+                        autoSourcesPending = (autoSourcesPending - 1).coerceAtLeast(0)
+                        if (autoSourcesPending == 0) finishAutoSourceFetch()
+                    } else statusView.text = "خطا در دریافت اشتراک: ${e.localizedMessage}"
                 }
             }
         }

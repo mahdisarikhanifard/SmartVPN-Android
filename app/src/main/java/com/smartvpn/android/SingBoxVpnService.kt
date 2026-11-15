@@ -135,11 +135,11 @@ class SingBoxVpnService : VpnService() {
         // URLTest starts its initial outbound checks asynchronously at engine startup.
         // Allow the parallel HTTPS probes to populate latency history before the
         // local proxy/TUN acceptance checks choose the selected outbound.
-        Thread.sleep(9000)
+        Thread.sleep(25000)
 
         val localFailures = mutableListOf<String>()
         var localProxySucceeded = false
-        for (host in listOf("example.com", "www.microsoft.com")) {
+        for (host in listOf("cp.cloudflare.com", "example.com", "www.microsoft.com")) {
             var raw: java.net.Socket? = null
             var tls: javax.net.ssl.SSLSocket? = null
             var phase = "LOCAL_PROXY_CONNECT"

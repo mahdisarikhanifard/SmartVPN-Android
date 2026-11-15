@@ -53,6 +53,7 @@ class MainActivity : Activity() {
     private var autoCandidateIndex = 0
     private var autoSourceIndex = 0
     private var autoSourcesPending = 0
+    @Volatile private var autoRunGeneration = 0
     private var autoSourceList: List<String> = emptyList()
     @Volatile private var autoConnecting = false
     private lateinit var root: LinearLayout
@@ -353,6 +354,8 @@ class MainActivity : Activity() {
 
     private fun startAutoConnect() {
         if (autoConnecting) return
+        autoRunGeneration += 1
+        autoSourcesPending = 0
 
         // Saved profiles (including standard WireGuard .conf files) remain eligible
         // candidates, but never suppress subscription refresh or public-source discovery.
@@ -391,7 +394,7 @@ class MainActivity : Activity() {
         }
         autoSourceList.forEachIndexed { index, address ->
             EventLog.append(this, "دریافت موازی منبع ${index + 1}/${autoSourceList.size}: ${runCatching { URL(address).host }.getOrDefault("منبع سفارشی")}")
-            fetchSubscription(address, true)
+            fetchSubscription(address, true, autoRunGeneration)
         }
         statusView.text = "در حال دریافت هم‌زمان ${autoSourceList.size} منبع؛ حداکثر چهار درخواست به‌صورت موازی…"
     }
@@ -562,7 +565,7 @@ class MainActivity : Activity() {
         } catch (_: Exception) { EventLog.append(this, "ارسال درخواست قطع اتصال ناموفق بود"); statusView.text = "وضعیت: اتصال VPN فعال نیست یا سرویس در دسترس نیست." }
     }
 
-    private fun fetchSubscription(address: String, forAutoConnect: Boolean = false) {
+    private fun fetchSubscription(address: String, forAutoConnect: Boolean = false, autoGeneration: Int = autoRunGeneration) {
         if (!address.startsWith("https://")) {
             toast("برای امنیت، فقط نشانی HTTPS پذیرفته می‌شود.")
             return
@@ -585,18 +588,18 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     renderServers()
                     saveServers()
-                    if (forAutoConnect) {
+                    if (forAutoConnect && autoGeneration == autoRunGeneration) {
                         autoSourcesPending = (autoSourcesPending - 1).coerceAtLeast(0)
                         if (autoSourcesPending == 0) finishAutoSourceFetch()
-                    } else statusView.text = "دریافت تمام شد؛ $count کانفیگ جدید شناسایی شد"
+                    } else if (!forAutoConnect) statusView.text = "دریافت تمام شد؛ $count کانفیگ جدید شناسایی شد"
                 }
             } catch (e: Exception) {
                 EventLog.append(this, "خطا در دریافت منبع ${runCatching { URL(address).host }.getOrDefault("نامشخص")}: ${e.javaClass.simpleName}: ${e.localizedMessage ?: "بدون توضیح"}")
                 runOnUiThread {
-                    if (forAutoConnect) {
+                    if (forAutoConnect && autoGeneration == autoRunGeneration) {
                         autoSourcesPending = (autoSourcesPending - 1).coerceAtLeast(0)
                         if (autoSourcesPending == 0) finishAutoSourceFetch()
-                    } else statusView.text = "خطا در دریافت اشتراک: ${e.localizedMessage}"
+                    } else if (!forAutoConnect) statusView.text = "خطا در دریافت اشتراک: ${e.localizedMessage}"
                 }
             }
         }

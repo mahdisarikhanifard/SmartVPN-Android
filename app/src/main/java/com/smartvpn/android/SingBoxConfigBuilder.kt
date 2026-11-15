@@ -310,10 +310,18 @@ object SingBoxConfigBuilder {
         return JSONObject()
             .put("log", JSONObject().put("level", "debug").put("timestamp", true))
             .put("dns", JSONObject()
-                .put("servers", JSONArray().put(JSONObject()
-                    .put("type", "udp").put("tag", "wireguard-dns")
-                    .put("server", dnsServer).put("server_port", 53)
-                    .put("detour", "proton-wireguard")))
+                // Use a public resolver through the encrypted WireGuard tunnel.
+                // The provider's internal 10.2.0.1 resolver can be unreachable on
+                // some Proton endpoints; pinning the DNS detour prevents DNS leaks.
+                .put("servers", JSONArray()
+                    .put(JSONObject()
+                        .put("type", "udp").put("tag", "wireguard-dns")
+                        .put("server", "1.1.1.1").put("server_port", 53)
+                        .put("detour", "proton-wireguard"))
+                    .put(JSONObject()
+                        .put("type", "udp").put("tag", "wireguard-dns-backup")
+                        .put("server", "9.9.9.9").put("server_port", 53)
+                        .put("detour", "proton-wireguard")))
                 .put("final", "wireguard-dns")
                 .put("strategy", if (hasLocalIpv6) "prefer_ipv4" else "ipv4_only"))
             .put("inbounds", JSONArray()

@@ -588,6 +588,17 @@ class MainActivity : Activity() {
             }.getOrNull()
             if (!decoded.isNullOrBlank() && decoded.contains("://")) content = decoded
         }
+        // A standard WireGuard profile is a multi-section INI document, not
+        // a line-based share link. Keep the complete document intact.
+        if (content.contains("[Interface]", ignoreCase = true) &&
+            content.contains("[Peer]", ignoreCase = true)) {
+            val entry = parseConfig(content) ?: return 0
+            if (servers.none { it.raw == entry.raw }) {
+                servers.add(entry)
+                return 1
+            }
+            return 0
+        }
         if (content.startsWith("{")) {
             val completeProfile = parseConfig(content)
             if (completeProfile != null && servers.none { it.raw == completeProfile.raw }) {
@@ -617,8 +628,32 @@ class MainActivity : Activity() {
             // Strip provider annotations and display fragments before URI parsing.
             // Some public feeds append unescaped labels/emoji after '#', which
             // makes java.net.URI reject otherwise valid server credentials.
-            val line = if (original.startsWith("{")) original
+            val line = if (original.startsWith("{") ||
+                (original.contains("[Interface]", ignoreCase = true) && original.contains("[Peer]", ignoreCase = true))) original
                 else original.substringBefore(" | ").substringBefore("#").trim()
+            if (line.contains("[Interface]", ignoreCase = true) && line.contains("[Peer]", ignoreCase = true)) {
+                val endpointLine = line.lineSequence().firstOrNull {
+                    it.trim().startsWith("Endpoint", ignoreCase = true) && it.contains("=")
+                } ?: return null
+                val endpoint = endpointLine.substringAfter("=").trim()
+                val host: String
+                val portText: String
+                if (endpoint.startsWith("[")) {
+                    val close = endpoint.indexOf(']')
+                    if (close <= 1 || close + 2 >= endpoint.length || endpoint[close + 1] != ':') return null
+                    host = endpoint.substring(1, close)
+                    portText = endpoint.substring(close + 2)
+                } else {
+                    val split = endpoint.lastIndexOf(':')
+                    if (split <= 0) return null
+                    host = endpoint.substring(0, split)
+                    portText = endpoint.substring(split + 1)
+                }
+                val port = portText.toIntOrNull() ?: return null
+                if (host.isBlank() || port !in 1..65535) return null
+                val name = "WireGuard — $host"
+                return ServerEntry(UUID.randomUUID().toString(), name, "WireGuard", host, port, line)
+            }
             if (line.startsWith("{")) {
                 val config = JSONObject(line)
                 val outbounds = config.optJSONArray("outbounds") ?: return null

@@ -408,7 +408,7 @@ class MainActivity : Activity() {
     }
 
     private fun rankAndConnectAutomatically() {
-        val allCandidates = servers.distinctBy { it.raw }
+        val allCandidates = synchronized(servers) { servers.distinctBy { it.raw } }
         // Test a priority slice plus a spread across later feeds, so one stale
         // subscription cannot monopolize the entire connection attempt.
         val prioritySlice = allCandidates.take(350)
@@ -771,7 +771,8 @@ class MainActivity : Activity() {
 
     private fun renderServers() {
         listView.removeAllViews()
-        if (servers.isEmpty()) {
+        val visibleServers = synchronized(servers) { servers.toList() }
+        if (visibleServers.isEmpty()) {
             listView.addView(TextView(this).apply {
                 text = "هنوز سروری اضافه نشده است."
                 setTextColor(Color.LTGRAY)
@@ -779,7 +780,7 @@ class MainActivity : Activity() {
             })
             return
         }
-        servers.forEachIndexed { index, server ->
+        visibleServers.forEachIndexed { index, server ->
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(12, 10, 12, 10)
@@ -823,8 +824,9 @@ class MainActivity : Activity() {
     }
 
     private fun saveServers() {
+        val snapshot = synchronized(servers) { servers.toList() }
         val array = JSONArray()
-        servers.forEach { server ->
+        snapshot.forEach { server ->
             array.put(JSONObject().apply {
                 put("id", server.id); put("name", server.name); put("protocol", server.protocol)
                 put("host", server.host); put("port", server.port); put("raw", server.raw)

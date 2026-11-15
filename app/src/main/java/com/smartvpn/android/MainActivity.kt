@@ -352,6 +352,23 @@ class MainActivity : Activity() {
 
     private fun startAutoConnect() {
         if (autoConnecting) return
+
+        // A locally imported Proton/standard WireGuard profile is an explicit
+        // user choice. Try it before downloading or selecting public Trojan/V2Ray
+        // feeds; otherwise the main Connect button silently ignores that profile.
+        val importedWireGuard = servers.lastOrNull { server ->
+            server.protocol.equals("WireGuard", ignoreCase = true) &&
+                server.raw.contains("[Interface]", ignoreCase = true) &&
+                server.raw.contains("[Peer]", ignoreCase = true)
+        }
+        if (importedWireGuard != null) {
+            autoConnecting = false
+            statusView.text = "در حال اتصال به کانفیگ WireGuard واردشده…"
+            EventLog.append(this, "کانفیگ دستی WireGuard اولویت گرفت؛ اتصال به ${importedWireGuard.host}:${importedWireGuard.port} بدون دریافت منابع عمومی")
+            connectServer(importedWireGuard)
+            return
+        }
+
         autoConnecting = true
         autoCandidateIndex = 0
         autoCandidates = emptyList()

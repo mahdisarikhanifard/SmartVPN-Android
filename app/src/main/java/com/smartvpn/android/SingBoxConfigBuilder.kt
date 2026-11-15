@@ -251,12 +251,25 @@ object SingBoxConfigBuilder {
         val localAddresses = iface["address"].orEmpty().split(',').map { it.trim() }.filter { it.isNotBlank() }
         val endpoint = peer["endpoint"].orEmpty()
         val publicKey = peer["publickey"].orEmpty()
-        val allowedIps = peer["allowedips"].orEmpty().split(',').map { it.trim() }.filter { it.isNotBlank() }
+        val configuredAllowedIps = peer["allowedips"].orEmpty().split(',').map { it.trim() }.filter { it.isNotBlank() }
         require(privateKey.isNotBlank()) { "کلید خصوصی در بخش [Interface] وجود ندارد." }
         require(localAddresses.isNotEmpty()) { "آدرس داخلی Address در فایل WireGuard وجود ندارد." }
         require(publicKey.isNotBlank()) { "کلید عمومی Peer در فایل WireGuard وجود ندارد." }
-        require(allowedIps.isNotEmpty()) { "AllowedIPs در بخش [Peer] وجود ندارد." }
+        require(configuredAllowedIps.isNotEmpty()) { "AllowedIPs در بخش [Peer] وجود ندارد." }
         require(endpoint.isNotBlank()) { "Endpoint در بخش [Peer] وجود ندارد." }
+
+        // A WireGuard peer cannot carry IPv6 traffic unless the Interface section
+        // also assigns a local IPv6 address. Some Proton profiles provide only
+        // an IPv4 tunnel address while AllowedIPs still contains ::/0. Sending
+        // IPv6 into that endpoint causes sing-box "missing IPv6 local address".
+        // In that case, keep IPv4 full-tunnel routing and explicitly reject IPv6
+        // inside sing-box (never fall back to the physical network).
+        val hasLocalIpv6 = localAddresses.any { it.substringBefore('/').contains(':') }
+        val allowedIps = if (hasLocalIpv6) configuredAllowedIps else
+            configuredAllowedIps.filterNot { it.substringBefore('/').contains(':') }
+        require(allowedIps.isNotEmpty()) {
+            "این پروفایل WireGuard آدرس IPv6 داخلی ندارد و هیچ مسیر IPv4 معتبری در AllowedIPs پیدا نشد."
+        }
 
         val server: String
         val port: Int
@@ -301,7 +314,8 @@ object SingBoxConfigBuilder {
                     .put("type", "udp").put("tag", "wireguard-dns")
                     .put("server", dnsServer).put("server_port", 53)
                     .put("detour", "proton-wireguard")))
-                .put("final", "wireguard-dns").put("strategy", "prefer_ipv4"))
+                .put("final", "wireguard-dns")
+                .put("strategy", if (hasLocalIpv6) "prefer_ipv4" else "ipv4_only"))
             .put("inbounds", JSONArray()
                 .put(JSONObject()
                     .put("type", "tun").put("tag", "tun-in")
@@ -313,6 +327,9 @@ object SingBoxConfigBuilder {
             .put("endpoints", JSONArray().put(endpointConfig))
             .put("route", JSONObject()
                 .put("auto_detect_interface", true)
+                .put("rules", if (hasLocalIpv6) JSONArray() else JSONArray().put(
+                    JSONObject().put("ip_version", 6).put("action", "reject")
+                ))
                 .put("final", "proton-wireguard"))
             .toString(2)
     }

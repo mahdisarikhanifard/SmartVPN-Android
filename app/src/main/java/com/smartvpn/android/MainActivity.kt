@@ -353,21 +353,10 @@ class MainActivity : Activity() {
     private fun startAutoConnect() {
         if (autoConnecting) return
 
-        // A locally imported Proton/standard WireGuard profile is an explicit
-        // user choice. Try it before downloading or selecting public Trojan/V2Ray
-        // feeds; otherwise the main Connect button silently ignores that profile.
-        val importedWireGuard = servers.lastOrNull { server ->
-            server.protocol.equals("WireGuard", ignoreCase = true) &&
-                server.raw.contains("[Interface]", ignoreCase = true) &&
-                server.raw.contains("[Peer]", ignoreCase = true)
-        }
-        if (importedWireGuard != null) {
-            autoConnecting = false
-            statusView.text = "در حال اتصال به کانفیگ WireGuard واردشده…"
-            EventLog.append(this, "کانفیگ دستی WireGuard اولویت گرفت؛ اتصال به ${importedWireGuard.host}:${importedWireGuard.port} بدون دریافت منابع عمومی")
-            connectServer(importedWireGuard)
-            return
-        }
+        // Saved profiles (including standard WireGuard .conf files) remain eligible
+        // candidates, but never suppress subscription refresh or public-source discovery.
+        // The automatic URLTest group contains share links; .conf profiles are retained
+        // as real-tunnel fallbacks because they require a complete standalone config.
 
         autoConnecting = true
         autoCandidateIndex = 0
@@ -412,7 +401,14 @@ class MainActivity : Activity() {
         val remaining = allCandidates.drop(350)
         val sampleStep = maxOf(1, remaining.size / 350)
         val diverseSlice = remaining.filterIndexed { index, _ -> index % sampleStep == 0 }.take(350)
-        val snapshot = (prioritySlice + diverseSlice).distinctBy { it.raw }
+        // Never lose locally imported WireGuard .conf profiles just because they
+        // occur after the feed sampling window. They are tested as actual tunnels later.
+        val savedWireGuard = allCandidates.filter { server ->
+            server.protocol.equals("WireGuard", ignoreCase = true) &&
+                server.raw.contains("[Interface]", ignoreCase = true) &&
+                server.raw.contains("[Peer]", ignoreCase = true)
+        }.take(5)
+        val snapshot = (prioritySlice + diverseSlice + savedWireGuard).distinctBy { it.raw }
         if (snapshot.isEmpty()) {
             autoConnecting = false
             statusView.text = "هیچ کانفیگ قابل پشتیبانی از منابع دریافت نشد."
@@ -448,9 +444,16 @@ class MainActivity : Activity() {
                 // perform the real HTTPS proxy-path ranking across these candidates.
                 val tcpShortlist = tested.filter { it.latencyMs >= 0 }.take(7)
                 val udpShortlist = tested.filter { it.latencyMs == -2L }.take(3)
-                val shortlist = (tcpShortlist + udpShortlist).distinctBy { it.raw }
-                    .plus(tested.filter { candidate -> (tcpShortlist + udpShortlist).none { it.raw == candidate.raw } })
-                    .take(10)
+                val savedWireGuard = tested.filter { server ->
+                    server.protocol.equals("WireGuard", ignoreCase = true) &&
+                        server.raw.contains("[Interface]", ignoreCase = true) &&
+                        server.raw.contains("[Peer]", ignoreCase = true)
+                }.take(5)
+                // UDP transports are not discarded by TCP-only probing. Standard
+                // WireGuard files are appended as standalone fallback attempts.
+                val shortlist = (tcpShortlist + udpShortlist + savedWireGuard).distinctBy { it.raw }
+                    .plus(tested.filter { candidate -> (tcpShortlist + udpShortlist + savedWireGuard).none { it.raw == candidate.raw } })
+                    .take(15)
                 autoCandidates = shortlist
                 autoCandidateIndex = 0
                 EventLog.append(this@MainActivity, "پایان غربالگری اولیه؛ ${shortlist.size} گزینه متنوع برای رتبه‌بندی واقعی HTTPS در sing-box انتخاب شد (از ${tested.size} گزینه قابل دسترس)")

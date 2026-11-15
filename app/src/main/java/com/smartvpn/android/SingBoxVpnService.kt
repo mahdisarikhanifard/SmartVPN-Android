@@ -133,20 +133,20 @@ class SingBoxVpnService : VpnService() {
         // Run both checks independently on every attempt. The local mixed inbound
         // validates the sing-box outbound; the direct socket validates Android TUN.
         // URLTest starts its initial outbound checks asynchronously at engine startup.
-        // Allow the parallel HTTPS probes to populate latency history before the
-        // local proxy/TUN acceptance checks choose the selected outbound.
-        Thread.sleep(25000)
+        // URLTest starts its outbound checks when the engine starts. A short
+        // warm-up is enough; a fixed 25-second sleep made every attempt feel stalled.
+        Thread.sleep(4500)
 
         val localFailures = mutableListOf<String>()
         var localProxySucceeded = false
-        for (host in listOf("cp.cloudflare.com", "example.com", "www.microsoft.com")) {
+        for (host in listOf("cp.cloudflare.com", "example.com")) {
             var raw: java.net.Socket? = null
             var tls: javax.net.ssl.SSLSocket? = null
             var phase = "LOCAL_PROXY_CONNECT"
             try {
                 raw = java.net.Socket()
-                raw.connect(java.net.InetSocketAddress("127.0.0.1", PROBE_PORT), 2500)
-                raw.soTimeout = 5000
+                raw.connect(java.net.InetSocketAddress("127.0.0.1", PROBE_PORT), 1800)
+                raw.soTimeout = 3500
 
                 phase = "PROXY_CONNECT"
                 val request = "CONNECT " + host + ":443 HTTP/1.1\r\nHost: " +
@@ -166,7 +166,7 @@ class SingBoxVpnService : VpnService() {
                 phase = "TLS_HANDSHAKE"
                 tls = (javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory)
                     .createSocket(raw, host, 443, true) as javax.net.ssl.SSLSocket
-                tls.soTimeout = 5000
+                tls.soTimeout = 3500
                 val parameters = tls.sslParameters
                 parameters.endpointIdentificationAlgorithm = "HTTPS"
                 parameters.serverNames = listOf(javax.net.ssl.SNIHostName(host))
@@ -224,7 +224,7 @@ class SingBoxVpnService : VpnService() {
         try {
             val ip = java.net.InetAddress.getByAddress(byteArrayOf(1, 1, 1, 1))
             raw = java.net.Socket()
-            raw.connect(java.net.InetSocketAddress(ip, 443), 5000)
+            raw.connect(java.net.InetSocketAddress(ip, 443), 3500)
             raw.soTimeout = 5000
 
             phase = "ANDROID_TUN_TLS"

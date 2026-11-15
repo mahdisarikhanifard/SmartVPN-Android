@@ -329,7 +329,7 @@ class SingBoxVpnService : VpnService() {
                 "writeDebugMessage" -> {
                     val message = args?.firstOrNull()?.toString().orEmpty()
                     val lower = message.lowercase(java.util.Locale.ROOT)
-                    if (listOf("error", "warn", "failed", "timeout", "dns", "connect", "tls", "protect", "route", "proxy").any { lower.contains(it) }) {
+                    if (listOf("error", "warn", "failed", "timeout", "dns", "connect", "tls", "protect", "route", "proxy", "wireguard", "handshake", "endpoint", "packet", "udp").any { lower.contains(it) }) {
                         Log.w(TAG, "sing-box: " + message.take(450))
                         sendStatus("diagnostic", message.take(450))
                     }

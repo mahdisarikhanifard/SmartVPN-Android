@@ -456,18 +456,18 @@ class MainActivity : Activity() {
                 if (!autoConnecting) return@runOnUiThread
                 // Keep a small, protocol-diverse shortlist. sing-box URLTest will
                 // perform the real HTTPS proxy-path ranking across these candidates.
-                val tcpShortlist = tested.filter { it.latencyMs >= 0 }.take(7)
-                val udpShortlist = tested.filter { it.latencyMs == -2L }.take(3)
+                val tcpShortlist = tested.filter { it.latencyMs >= 0 }.take(5)
+                val udpShortlist = tested.filter { it.latencyMs == -2L }.take(2)
                 val savedWireGuard = tested.filter { server ->
                     server.protocol.equals("WireGuard", ignoreCase = true) &&
                         server.raw.contains("[Interface]", ignoreCase = true) &&
                         server.raw.contains("[Peer]", ignoreCase = true)
-                }.take(5)
-                // UDP transports are not discarded by TCP-only probing. Standard
-                // WireGuard files are appended as standalone fallback attempts.
+                }.take(3)
+                // Keep the first real-tunnel test bounded. TCP only orders candidates;
+                // each candidate must pass its own HTTPS check before it is accepted.
                 val shortlist = (tcpShortlist + udpShortlist + savedWireGuard).distinctBy { it.raw }
                     .plus(tested.filter { candidate -> (tcpShortlist + udpShortlist + savedWireGuard).none { it.raw == candidate.raw } })
-                    .take(15)
+                    .take(10)
                 autoCandidates = shortlist
                 autoCandidateIndex = 0
                 EventLog.append(this@MainActivity, "پایان غربالگری اولیه؛ ${shortlist.size} گزینه متنوع برای رتبه‌بندی واقعی HTTPS در sing-box انتخاب شد (از ${tested.size} گزینه قابل دسترس)")
@@ -484,21 +484,13 @@ class MainActivity : Activity() {
 
     private fun connectAutoGroup() {
         if (!autoConnecting || autoCandidates.isEmpty()) return
-        try {
-            val config = SingBoxConfigBuilder.buildAuto(autoCandidates.map { it.raw })
-            EventLog.append(this, "شروع آزمون هم‌زمان مسیر واقعی؛ ${autoCandidates.size} outbound در گروه URLTest؛ انتخاب بر اساس تأخیر HTTPS از داخل پراکسی")
-            statusView.text = "در حال آزمایش واقعی ${autoCandidates.size} سرور به‌صورت هم‌زمان؛ انتخاب سریع‌ترین مسیر سالم…"
-            val permission = VpnService.prepare(this)
-            if (permission != null) {
-                pendingVpnConfig = config
-                startActivityForResult(permission, REQUEST_VPN_PERMISSION)
-            } else {
-                startVpnService(config)
-            }
-        } catch (e: Exception) {
-            EventLog.append(this, "ساخت گروه رتبه‌بندی خودکار ناموفق؛ بازگشت به آزمون تک‌سروری: ${e.javaClass.simpleName}: ${e.message}")
-            connectNextRanked()
-        }
+        // Do not launch a URLTest group here. Its asynchronous initial checks can
+        // select an unverified first outbound while the service is already probing
+        // the tunnel. Test one complete profile at a time and advance only after
+        // the local proxy and Android TUN both pass HTTPS verification.
+        EventLog.append(this, "شروع آزمون ترتیبی تونل؛ ${autoCandidates.size} گزینه؛ هر سرور با پیکربندی مستقل و آزمون واقعی HTTPS بررسی می‌شود")
+        statusView.text = "در حال آزمایش مستقل سرورها؛ فقط پس از تأیید HTTPS اتصال برقرار می‌شود…"
+        connectNextRanked()
     }
 
     private fun connectNextRanked() {

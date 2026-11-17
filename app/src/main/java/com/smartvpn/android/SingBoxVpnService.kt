@@ -132,10 +132,9 @@ class SingBoxVpnService : VpnService() {
     private fun verifyTunnelConnectivity(): String? {
         // Run both checks independently on every attempt. The local mixed inbound
         // validates the sing-box outbound; the direct socket validates Android TUN.
-        // URLTest starts its initial outbound checks asynchronously at engine startup.
-        // URLTest starts its outbound checks when the engine starts. A short
-        // warm-up is enough; a fixed 25-second sleep made every attempt feel stalled.
-        Thread.sleep(4500)
+        // Candidates are now started as standalone profiles, not through URLTest.
+        // Allow libbox and the Android TUN to settle before the first HTTPS probe.
+        Thread.sleep(1800)
 
         val localFailures = mutableListOf<String>()
         var localProxySucceeded = false

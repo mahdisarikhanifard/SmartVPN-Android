@@ -15,8 +15,8 @@ android {
         applicationId = "com.smartvpn.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 31
-        versionName = "0.9.1"
+        versionCode = 32
+        versionName = "0.9.2"
     }
 
     compileOptions {

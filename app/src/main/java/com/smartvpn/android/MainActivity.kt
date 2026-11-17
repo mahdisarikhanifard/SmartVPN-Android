@@ -454,8 +454,8 @@ class MainActivity : Activity() {
                     .thenBy { if (it.latencyMs >= 0) it.latencyMs else snapshot.indexOf(it) })
             runOnUiThread {
                 if (!autoConnecting) return@runOnUiThread
-                // Keep a small, protocol-diverse shortlist. sing-box URLTest will
-                // perform the real HTTPS proxy-path ranking across these candidates.
+                // Keep a small, protocol-diverse shortlist for independent
+                // end-to-end HTTPS checks; TCP latency is only a first-pass filter.
                 val tcpShortlist = tested.filter { it.latencyMs >= 0 }.take(5)
                 val udpShortlist = tested.filter { it.latencyMs == -2L }.take(2)
                 val savedWireGuard = tested.filter { server ->

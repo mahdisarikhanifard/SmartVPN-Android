@@ -162,13 +162,13 @@ class SingBoxVpnService : VpnService() {
                 raw.soTimeout = 5000
 
                 phase = "PROXY_CONNECT"
-                val request = "CONNECT " + ip + ":443 HTTP/1.1\\r\\nHost: " +
-                    ip + ":443\\r\\nProxy-Connection: Keep-Alive\\r\\n\\r\\n"
+                val request = "CONNECT " + ip + ":443 HTTP/1.1\r\nHost: " +
+                    ip + ":443\r\nProxy-Connection: Keep-Alive\r\n\r\n"
                 raw.getOutputStream().write(request.toByteArray(Charsets.US_ASCII))
                 raw.getOutputStream().flush()
                 val input = raw.getInputStream()
                 val statusLine = readHttpLine(input)
-                if (!statusLine.matches(Regex("""^HTTP/1\\.[01]\\s+2\\d\\d(?:\\s.*)?$"""))) {
+                if (!statusLine.matches(Regex("""^HTTP/1\.[01]\s+2\d\d(?:\s.*)?$"""))) {
                     throw IllegalStateException("پاسخ CONNECT ناموفق: " + statusLine.take(160))
                 }
                 while (true) {
@@ -187,12 +187,12 @@ class SingBoxVpnService : VpnService() {
                 tls.startHandshake()
 
                 phase = "HTTPS_REQUEST"
-                val httpsRequest = "GET / HTTP/1.1\\r\\nHost: " + sni +
-                    "\\r\\nUser-Agent: SmartVPN-Android/0.9.2\\r\\nConnection: close\\r\\n\\r\\n"
+                val httpsRequest = "GET / HTTP/1.1\r\nHost: " + sni +
+                    "\r\nUser-Agent: SmartVPN-Android/0.9.2\r\nConnection: close\r\n\r\n"
                 tls.outputStream.write(httpsRequest.toByteArray(Charsets.US_ASCII))
                 tls.outputStream.flush()
                 val response = readHttpLine(tls.inputStream)
-                val code = Regex("""^HTTP/\\d(?:\\.\\d)?\\s+(\\d{3})""")
+                val code = Regex("""^HTTP/\d(?:\.\d)?\s+(\d{3})""")
                     .find(response)?.groupValues?.get(1)?.toIntOrNull()
                 // A 4xx response still proves end-to-end TLS/HTTP connectivity.
                 if (code != null && code in 200..499) {
@@ -250,12 +250,12 @@ class SingBoxVpnService : VpnService() {
                 tls.startHandshake()
 
                 phase = "ANDROID_TUN_HTTPS"
-                val request = "GET / HTTP/1.1\\r\\nHost: " + sni +
-                    "\\r\\nUser-Agent: SmartVPN-Android/0.9.2-TUN\\r\\nConnection: close\\r\\n\\r\\n"
+                val request = "GET / HTTP/1.1\r\nHost: " + sni +
+                    "\r\nUser-Agent: SmartVPN-Android/0.9.2-TUN\r\nConnection: close\r\n\r\n"
                 tls.outputStream.write(request.toByteArray(Charsets.US_ASCII))
                 tls.outputStream.flush()
                 val response = readHttpLine(tls.inputStream)
-                val code = Regex("""^HTTP/\\d(?:\\.\\d)?\\s+(\\d{3})""")
+                val code = Regex("""^HTTP/\d(?:\.\d)?\s+(\d{3})""")
                     .find(response)?.groupValues?.get(1)?.toIntOrNull()
                 if (code != null && code in 200..499) {
                     Log.i(TAG, "Android TUN probe succeeded: " + label + " (" + ip + ") HTTP " + code)

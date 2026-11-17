@@ -1,9 +1,11 @@
-name: Build SmartVPN APK
+name: Build SmartVPN APK 0.9.2
+run-name: SmartVPN 0.9.2 APK Build
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "codex/**" ]
   pull_request:
     branches: [ "main" ]
+    types: [ "opened", "synchronize", "reopened", "ready_for_review" ]
   workflow_dispatch:
 permissions:
   contents: read
@@ -19,9 +21,9 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
-      - name: Build debug APK
+      - name: Build debug APK 0.9.2
         run: gradle --no-daemon assembleDebug
       - uses: actions/upload-artifact@v4
         with:
-          name: SmartVPN-debug
+          name: SmartVPN-0.9.2-debug
           path: app/build/outputs/apk/debug/app-debug.apk

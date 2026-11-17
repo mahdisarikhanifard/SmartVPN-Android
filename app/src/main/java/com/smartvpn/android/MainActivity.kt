@@ -52,6 +52,8 @@ class MainActivity : Activity() {
     private var autoCandidates: List<ServerEntry> = emptyList()
     private var autoCandidateIndex = 0
     private var autoSourceIndex = 0
+    private var autoSourcesPending = 0
+    @Volatile private var autoRunGeneration = 0
     private var autoSourceList: List<String> = emptyList()
     @Volatile private var autoConnecting = false
     private lateinit var root: LinearLayout
@@ -352,22 +354,13 @@ class MainActivity : Activity() {
 
     private fun startAutoConnect() {
         if (autoConnecting) return
+        autoRunGeneration += 1
+        autoSourcesPending = 0
 
-        // A locally imported Proton/standard WireGuard profile is an explicit
-        // user choice. Try it before downloading or selecting public Trojan/V2Ray
-        // feeds; otherwise the main Connect button silently ignores that profile.
-        val importedWireGuard = servers.lastOrNull { server ->
-            server.protocol.equals("WireGuard", ignoreCase = true) &&
-                server.raw.contains("[Interface]", ignoreCase = true) &&
-                server.raw.contains("[Peer]", ignoreCase = true)
-        }
-        if (importedWireGuard != null) {
-            autoConnecting = false
-            statusView.text = "در حال اتصال به کانفیگ WireGuard واردشده…"
-            EventLog.append(this, "کانفیگ دستی WireGuard اولویت گرفت؛ اتصال به ${importedWireGuard.host}:${importedWireGuard.port} بدون دریافت منابع عمومی")
-            connectServer(importedWireGuard)
-            return
-        }
+        // Saved profiles (including standard WireGuard .conf files) remain eligible
+        // candidates, but never suppress subscription refresh or public-source discovery.
+        // The automatic URLTest group contains share links; .conf profiles are retained
+        // as real-tunnel fallbacks because they require a complete standalone config.
 
         autoConnecting = true
         autoCandidateIndex = 0
@@ -391,28 +384,45 @@ class MainActivity : Activity() {
     }
 
     private fun fetchNextAutoSource() {
-        if (!autoConnecting) return
-        if (autoSourceIndex >= autoSourceList.size) {
-            statusView.text = "دریافت منابع تمام شد؛ ${servers.size} کانفیگ یکتا برای بررسی پیدا شد."
-            EventLog.append(this, "پایان دریافت منابع؛ ${servers.size} کانفیگ یکتا آماده بررسی است")
-            rankAndConnectAutomatically()
+        if (!autoConnecting || autoSourcesPending > 0) return
+        // Fetch feeds concurrently (the IO executor caps concurrency at four).
+        // Serial 25-second network timeouts made seven sources take several minutes.
+        autoSourcesPending = autoSourceList.size
+        if (autoSourcesPending == 0) {
+            finishAutoSourceFetch()
             return
         }
-        val address = autoSourceList[autoSourceIndex++]
-        statusView.text = "در حال دریافت منبع ${autoSourceIndex} از ${autoSourceList.size}…"
-        EventLog.append(this, "دریافت منبع ${autoSourceIndex}/${autoSourceList.size}: ${runCatching { URL(address).host }.getOrDefault("منبع سفارشی")}")
-        fetchSubscription(address, true)
+        autoSourceList.forEachIndexed { index, address ->
+            EventLog.append(this, "دریافت موازی منبع ${index + 1}/${autoSourceList.size}: ${runCatching { URL(address).host }.getOrDefault("منبع سفارشی")}")
+            fetchSubscription(address, true, autoRunGeneration)
+        }
+        statusView.text = "در حال دریافت هم‌زمان ${autoSourceList.size} منبع؛ حداکثر چهار درخواست به‌صورت موازی…"
+    }
+
+    private fun finishAutoSourceFetch() {
+        if (!autoConnecting) return
+        autoSourcesPending = 0
+        statusView.text = "دریافت منابع تمام شد؛ ${servers.size} کانفیگ یکتا برای بررسی پیدا شد."
+        EventLog.append(this, "پایان دریافت همه منابع؛ ${servers.size} کانفیگ یکتا آماده بررسی است")
+        rankAndConnectAutomatically()
     }
 
     private fun rankAndConnectAutomatically() {
-        val allCandidates = servers.distinctBy { it.raw }
+        val allCandidates = synchronized(servers) { servers.distinctBy { it.raw } }
         // Test a priority slice plus a spread across later feeds, so one stale
         // subscription cannot monopolize the entire connection attempt.
         val prioritySlice = allCandidates.take(350)
         val remaining = allCandidates.drop(350)
         val sampleStep = maxOf(1, remaining.size / 350)
         val diverseSlice = remaining.filterIndexed { index, _ -> index % sampleStep == 0 }.take(350)
-        val snapshot = (prioritySlice + diverseSlice).distinctBy { it.raw }
+        // Never lose locally imported WireGuard .conf profiles just because they
+        // occur after the feed sampling window. They are tested as actual tunnels later.
+        val savedWireGuard = allCandidates.filter { server ->
+            server.protocol.equals("WireGuard", ignoreCase = true) &&
+                server.raw.contains("[Interface]", ignoreCase = true) &&
+                server.raw.contains("[Peer]", ignoreCase = true)
+        }.take(5)
+        val snapshot = (prioritySlice + diverseSlice + savedWireGuard).distinctBy { it.raw }
         if (snapshot.isEmpty()) {
             autoConnecting = false
             statusView.text = "هیچ کانفیگ قابل پشتیبانی از منابع دریافت نشد."
@@ -444,12 +454,19 @@ class MainActivity : Activity() {
                     .thenBy { if (it.latencyMs >= 0) it.latencyMs else snapshot.indexOf(it) })
             runOnUiThread {
                 if (!autoConnecting) return@runOnUiThread
-                // Keep a small, protocol-diverse shortlist. sing-box URLTest will
-                // perform the real HTTPS proxy-path ranking across these candidates.
-                val tcpShortlist = tested.filter { it.latencyMs >= 0 }.take(7)
-                val udpShortlist = tested.filter { it.latencyMs == -2L }.take(3)
-                val shortlist = (tcpShortlist + udpShortlist).distinctBy { it.raw }
-                    .plus(tested.filter { candidate -> (tcpShortlist + udpShortlist).none { it.raw == candidate.raw } })
+                // Keep a small, protocol-diverse shortlist for independent
+                // end-to-end HTTPS checks; TCP latency is only a first-pass filter.
+                val tcpShortlist = tested.filter { it.latencyMs >= 0 }.take(5)
+                val udpShortlist = tested.filter { it.latencyMs == -2L }.take(2)
+                val savedWireGuard = tested.filter { server ->
+                    server.protocol.equals("WireGuard", ignoreCase = true) &&
+                        server.raw.contains("[Interface]", ignoreCase = true) &&
+                        server.raw.contains("[Peer]", ignoreCase = true)
+                }.take(3)
+                // Keep the first real-tunnel test bounded. TCP only orders candidates;
+                // each candidate must pass its own HTTPS check before it is accepted.
+                val shortlist = (tcpShortlist + udpShortlist + savedWireGuard).distinctBy { it.raw }
+                    .plus(tested.filter { candidate -> (tcpShortlist + udpShortlist + savedWireGuard).none { it.raw == candidate.raw } })
                     .take(10)
                 autoCandidates = shortlist
                 autoCandidateIndex = 0
@@ -467,21 +484,13 @@ class MainActivity : Activity() {
 
     private fun connectAutoGroup() {
         if (!autoConnecting || autoCandidates.isEmpty()) return
-        try {
-            val config = SingBoxConfigBuilder.buildAuto(autoCandidates.map { it.raw })
-            EventLog.append(this, "شروع آزمون هم‌زمان مسیر واقعی؛ ${autoCandidates.size} outbound در گروه URLTest؛ انتخاب بر اساس تأخیر HTTPS از داخل پراکسی")
-            statusView.text = "در حال آزمایش واقعی ${autoCandidates.size} سرور به‌صورت هم‌زمان؛ انتخاب سریع‌ترین مسیر سالم…"
-            val permission = VpnService.prepare(this)
-            if (permission != null) {
-                pendingVpnConfig = config
-                startActivityForResult(permission, REQUEST_VPN_PERMISSION)
-            } else {
-                startVpnService(config)
-            }
-        } catch (e: Exception) {
-            EventLog.append(this, "ساخت گروه رتبه‌بندی خودکار ناموفق؛ بازگشت به آزمون تک‌سروری: ${e.javaClass.simpleName}: ${e.message}")
-            connectNextRanked()
-        }
+        // Do not launch a URLTest group here. Its asynchronous initial checks can
+        // select an unverified first outbound while the service is already probing
+        // the tunnel. Test one complete profile at a time and advance only after
+        // the local proxy and Android TUN both pass HTTPS verification.
+        EventLog.append(this, "شروع آزمون ترتیبی تونل؛ ${autoCandidates.size} گزینه؛ هر سرور با پیکربندی مستقل و آزمون واقعی HTTPS بررسی می‌شود")
+        statusView.text = "در حال آزمایش مستقل سرورها؛ فقط پس از تأیید HTTPS اتصال برقرار می‌شود…"
+        connectNextRanked()
     }
 
     private fun connectNextRanked() {
@@ -548,7 +557,7 @@ class MainActivity : Activity() {
         } catch (_: Exception) { EventLog.append(this, "ارسال درخواست قطع اتصال ناموفق بود"); statusView.text = "وضعیت: اتصال VPN فعال نیست یا سرویس در دسترس نیست." }
     }
 
-    private fun fetchSubscription(address: String, forAutoConnect: Boolean = false) {
+    private fun fetchSubscription(address: String, forAutoConnect: Boolean = false, autoGeneration: Int = autoRunGeneration) {
         if (!address.startsWith("https://")) {
             toast("برای امنیت، فقط نشانی HTTPS پذیرفته می‌شود.")
             return
@@ -557,8 +566,8 @@ class MainActivity : Activity() {
         io.execute {
             try {
                 val connection = URL(address).openConnection() as HttpURLConnection
-                connection.connectTimeout = 10000
-                connection.readTimeout = 15000
+                connection.connectTimeout = 6000
+                connection.readTimeout = 9000
                 connection.instanceFollowRedirects = true
                 connection.setRequestProperty("User-Agent", "SmartVPN-Android/0.2")
                 val body = connection.inputStream.bufferedReader().use { it.readText() }
@@ -566,20 +575,23 @@ class MainActivity : Activity() {
                 val parseBody = if (forAutoConnect && body.contains("://")) {
                     body.lineSequence().take(900).joinToString("\n")
                 } else body
-                val count = addParsedContent(parseBody)
+                val count = synchronized(servers) { addParsedContent(parseBody) }
                 EventLog.append(this, "دریافت منبع موفق؛ حجم پاسخ ${body.toByteArray().size} بایت؛ کانفیگ جدید $count؛ میزبان ${runCatching { URL(address).host }.getOrDefault("نامشخص")}")
                 runOnUiThread {
                     renderServers()
                     saveServers()
-                    if (forAutoConnect) {
-                        fetchNextAutoSource()
-                    } else statusView.text = "دریافت تمام شد؛ $count کانفیگ جدید شناسایی شد"
+                    if (forAutoConnect && autoGeneration == autoRunGeneration) {
+                        autoSourcesPending = (autoSourcesPending - 1).coerceAtLeast(0)
+                        if (autoSourcesPending == 0) finishAutoSourceFetch()
+                    } else if (!forAutoConnect) statusView.text = "دریافت تمام شد؛ $count کانفیگ جدید شناسایی شد"
                 }
             } catch (e: Exception) {
                 EventLog.append(this, "خطا در دریافت منبع ${runCatching { URL(address).host }.getOrDefault("نامشخص")}: ${e.javaClass.simpleName}: ${e.localizedMessage ?: "بدون توضیح"}")
                 runOnUiThread {
-                    if (forAutoConnect) fetchNextAutoSource()
-                    else statusView.text = "خطا در دریافت اشتراک: ${e.localizedMessage}"
+                    if (forAutoConnect && autoGeneration == autoRunGeneration) {
+                        autoSourcesPending = (autoSourcesPending - 1).coerceAtLeast(0)
+                        if (autoSourcesPending == 0) finishAutoSourceFetch()
+                    } else if (!forAutoConnect) statusView.text = "خطا در دریافت اشتراک: ${e.localizedMessage}"
                 }
             }
         }
@@ -751,7 +763,8 @@ class MainActivity : Activity() {
 
     private fun renderServers() {
         listView.removeAllViews()
-        if (servers.isEmpty()) {
+        val visibleServers = synchronized(servers) { servers.toList() }
+        if (visibleServers.isEmpty()) {
             listView.addView(TextView(this).apply {
                 text = "هنوز سروری اضافه نشده است."
                 setTextColor(Color.LTGRAY)
@@ -759,7 +772,7 @@ class MainActivity : Activity() {
             })
             return
         }
-        servers.forEachIndexed { index, server ->
+        visibleServers.forEachIndexed { index, server ->
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(12, 10, 12, 10)
@@ -803,8 +816,9 @@ class MainActivity : Activity() {
     }
 
     private fun saveServers() {
+        val snapshot = synchronized(servers) { servers.toList() }
         val array = JSONArray()
-        servers.forEach { server ->
+        snapshot.forEach { server ->
             array.put(JSONObject().apply {
                 put("id", server.id); put("name", server.name); put("protocol", server.protocol)
                 put("host", server.host); put("port", server.port); put("raw", server.raw)
